@@ -1,0 +1,97 @@
+{
+  "vectorVersion": "1.0",
+  "validMetadata": [
+    {
+      "name": "HEIC metadata",
+      "metadata": {
+        "photoId": "photo_0123456789ABCDEF",
+        "fileName": "IMG_0001.HEIC",
+        "mimeType": "image/heic",
+        "byteSize": 28,
+        "widthPx": 4032,
+        "heightPx": 3024,
+        "sha256": "ad2978fb96ca33695ff82081c97814a8d111fc652fdb975432a9cb36ee6b00ac",
+        "downloadPath": "/v1/photos/photo_0123456789ABCDEF",
+        "futureColorSpace": "Display-P3"
+      }
+    }
+  ],
+  "invalidMetadata": [
+    {
+      "name": "download path does not match ID",
+      "metadata": {
+        "photoId": "photo_0123456789ABCDEF",
+        "fileName": "IMG_0001.HEIC",
+        "mimeType": "image/heic",
+        "byteSize": 28,
+        "widthPx": 4032,
+        "heightPx": 3024,
+        "sha256": "ad2978fb96ca33695ff82081c97814a8d111fc652fdb975432a9cb36ee6b00ac",
+        "downloadPath": "/v1/photos/photo_DIFFERENT_123456"
+      },
+      "expectedError": "INVALID_PHOTO_METADATA"
+    },
+    {
+      "name": "uppercase SHA-256 rejected",
+      "metadata": {
+        "photoId": "photo_0123456789ABCDEF",
+        "fileName": "IMG_0001.HEIC",
+        "mimeType": "image/heic",
+        "byteSize": 28,
+        "widthPx": 4032,
+        "heightPx": 3024,
+        "sha256": "AD2978FB96CA33695FF82081C97814A8D111FC652FDB975432A9CB36EE6B00AC",
+        "downloadPath": "/v1/photos/photo_0123456789ABCDEF"
+      },
+      "expectedError": "INVALID_PHOTO_METADATA"
+    },
+    {
+      "name": "photo exceeds resource cap",
+      "metadata": {
+        "photoId": "photo_0123456789ABCDEF",
+        "fileName": "IMG_0001.HEIC",
+        "mimeType": "image/heic",
+        "byteSize": 536870913,
+        "widthPx": 4032,
+        "heightPx": 3024,
+        "sha256": "ad2978fb96ca33695ff82081c97814a8d111fc652fdb975432a9cb36ee6b00ac",
+        "downloadPath": "/v1/photos/photo_0123456789ABCDEF"
+      },
+      "expectedError": "INVALID_PHOTO_METADATA"
+    }
+  ],
+  "integrity": [
+    {
+      "name": "matching length and SHA-256",
+      "contentHex": "72656d6f74652d63616d2d707265766965772d70686f746f2d76310a",
+      "expectedSize": 28,
+      "expectedSha256": "ad2978fb96ca33695ff82081c97814a8d111fc652fdb975432a9cb36ee6b00ac",
+      "valid": true
+    },
+    {
+      "name": "truncated body",
+      "contentHex": "72656d6f74652d63616d2d707265766965772d70686f746f2d7631",
+      "expectedSize": 28,
+      "expectedSha256": "ad2978fb96ca33695ff82081c97814a8d111fc652fdb975432a9cb36ee6b00ac",
+      "valid": false,
+      "expectedError": "PHOTO_LENGTH_MISMATCH"
+    },
+    {
+      "name": "body longer than declared",
+      "contentHex": "72656d6f74652d63616d2d707265766965772d70686f746f2d76310a00",
+      "expectedSize": 28,
+      "expectedSha256": "ad2978fb96ca33695ff82081c97814a8d111fc652fdb975432a9cb36ee6b00ac",
+      "valid": false,
+      "expectedError": "PHOTO_LENGTH_MISMATCH"
+    },
+    {
+      "name": "same length but wrong digest",
+      "contentHex": "72656d6f74652d63616d2d707265766965772d70686f746f2d76310b",
+      "expectedSize": 28,
+      "expectedSha256": "ad2978fb96ca33695ff82081c97814a8d111fc652fdb975432a9cb36ee6b00ac",
+      "valid": false,
+      "expectedError": "PHOTO_SHA256_MISMATCH"
+    }
+  ]
+}
+

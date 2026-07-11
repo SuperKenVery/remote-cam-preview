@@ -1,0 +1,384 @@
+{
+  "vectorVersion": "1.0",
+  "schema": "../../schemas/v1/control-message.schema.json",
+  "valid": [
+    {
+      "name": "monitor hello with unknown optional field",
+      "message": {
+        "type": "session.hello",
+        "requestId": "hello-1",
+        "protocolVersion": "1.0",
+        "payload": {
+          "role": "monitor",
+          "sessionId": "session_0123456789ABCDEF",
+          "supportedProtocolVersions": ["1.0"],
+          "display": {
+            "nativeWidthPx": 1179,
+            "nativeHeightPx": 2556,
+            "viewportWidthPx": 1179,
+            "viewportHeightPx": 2360,
+            "orientation": "portrait",
+            "futureSafeAreaHint": 59
+          },
+          "hevc": {
+            "profiles": ["main", "main10"],
+            "maxWidthPx": 3840,
+            "maxHeightPx": 2160,
+            "maxFps": 60,
+            "maxLevelIdc": 153
+          },
+          "photoReceiveEnabled": true
+        },
+        "futureEnvelopeField": "ignored"
+      }
+    },
+    {
+      "name": "capture accepts negotiated stream",
+      "message": {
+        "type": "session.accepted",
+        "requestId": "hello-1",
+        "protocolVersion": "1.0",
+        "payload": {
+          "role": "capture",
+          "sessionId": "session_0123456789ABCDEF",
+          "accessToken": "bearer_0123456789ABCDEF0123456789",
+          "preview": {
+            "configId": "config-1",
+            "widthPx": 1179,
+            "heightPx": 2096,
+            "sampleAspectRatio": {"width": 1, "height": 1},
+            "fps": 30,
+            "bitrateBps": 10000000,
+            "profile": "main",
+            "levelIdc": 120,
+            "rotationDegrees": 0,
+            "clockRate": 90000,
+            "noBFrames": true
+          },
+          "rtp": {
+            "destinationAddress": "fe80::1%aware0",
+            "rtpPort": 49152,
+            "rtcpPort": 49153,
+            "payloadType": 98,
+            "ssrc": 270544960,
+            "maxRtpPacketSize": 1200
+          },
+          "photoEndpoint": {"port": 49154}
+        }
+      }
+    },
+    {
+      "name": "start preview",
+      "message": {
+        "type": "preview.start",
+        "requestId": "preview-start-1",
+        "protocolVersion": "1.0",
+        "payload": {"configId": "config-1"}
+      }
+    },
+    {
+      "name": "stop preview",
+      "message": {
+        "type": "preview.stop",
+        "requestId": "preview-stop-1",
+        "protocolVersion": "1.0",
+        "payload": {"reason": "user"}
+      }
+    },
+    {
+      "name": "reconfigure preview",
+      "message": {
+        "type": "preview.reconfigure",
+        "requestId": "preview-reconfigure-1",
+        "protocolVersion": "1.0",
+        "payload": {
+          "reason": "orientation",
+          "preview": {
+            "configId": "config-2",
+            "widthPx": 2096,
+            "heightPx": 1179,
+            "sampleAspectRatio": {"width": 1, "height": 1},
+            "fps": 30,
+            "bitrateBps": 10000000,
+            "profile": "main",
+            "levelIdc": 120,
+            "rotationDegrees": 90,
+            "clockRate": 90000,
+            "noBFrames": true
+          }
+        }
+      }
+    },
+    {
+      "name": "request lower link tier",
+      "message": {
+        "type": "preview.tierRequest",
+        "requestId": "tier-1",
+        "protocolVersion": "1.0",
+        "payload": {
+          "maxBitrateBps": 6000000,
+          "maxWidthPx": 1920,
+          "maxHeightPx": 1080
+        }
+      }
+    },
+    {
+      "name": "disable photo reception",
+      "message": {
+        "type": "photo.receivePreference",
+        "requestId": "photo-pref-1",
+        "protocolVersion": "1.0",
+        "payload": {"enabled": false}
+      }
+    },
+    {
+      "name": "photo saved on capture device",
+      "message": {
+        "type": "photo.captured",
+        "requestId": "capture-event-1",
+        "protocolVersion": "1.0",
+        "payload": {"captureId": "capture-1", "savedLocally": true}
+      }
+    },
+    {
+      "name": "photo available",
+      "message": {
+        "type": "photo.available",
+        "requestId": "photo-available-1",
+        "protocolVersion": "1.0",
+        "payload": {
+          "metadata": {
+            "photoId": "photo_0123456789ABCDEF",
+            "fileName": "IMG_0001.HEIC",
+            "mimeType": "image/heic",
+            "byteSize": 28,
+            "widthPx": 4032,
+            "heightPx": 3024,
+            "sha256": "ad2978fb96ca33695ff82081c97814a8d111fc652fdb975432a9cb36ee6b00ac",
+            "downloadPath": "/v1/photos/photo_0123456789ABCDEF"
+          },
+          "expiresInSeconds": 120
+        }
+      }
+    },
+    {
+      "name": "photo transfer success",
+      "message": {
+        "type": "photo.transferResult",
+        "requestId": "photo-result-1",
+        "protocolVersion": "1.0",
+        "payload": {"photoId": "photo_0123456789ABCDEF", "status": "saved"}
+      }
+    },
+    {
+      "name": "photo transfer failure",
+      "message": {
+        "type": "photo.transferResult",
+        "requestId": "photo-result-2",
+        "protocolVersion": "1.0",
+        "payload": {
+          "photoId": "photo_0123456789ABCDEF",
+          "status": "failed",
+          "errorCode": "PHOTO_LIBRARY_DENIED"
+        }
+      }
+    },
+    {
+      "name": "heartbeat ping",
+      "message": {
+        "type": "heartbeat.ping",
+        "requestId": "ping-1",
+        "protocolVersion": "1.0",
+        "payload": {"sentAtMs": 123456789}
+      }
+    },
+    {
+      "name": "heartbeat pong",
+      "message": {
+        "type": "heartbeat.pong",
+        "requestId": "ping-1",
+        "protocolVersion": "1.0",
+        "payload": {"sentAtMs": 123456789}
+      }
+    },
+    {
+      "name": "request keyframe after loss",
+      "message": {
+        "type": "keyframe.request",
+        "requestId": "keyframe-1",
+        "protocolVersion": "1.0",
+        "payload": {"mediaSsrc": 270544960, "reason": "loss"}
+      }
+    },
+    {
+      "name": "explicit protocol error",
+      "message": {
+        "type": "error",
+        "requestId": "preview-start-1",
+        "protocolVersion": "1.0",
+        "payload": {
+          "code": "INVALID_STATE",
+          "message": "preview is not connected",
+          "retryable": true,
+          "relatedRequestId": "preview-start-1"
+        }
+      }
+    },
+    {
+      "name": "end session",
+      "message": {
+        "type": "session.end",
+        "requestId": "end-1",
+        "protocolVersion": "1.0",
+        "payload": {"reason": "user"}
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "name": "unsupported protocol major",
+      "message": {
+        "type": "heartbeat.ping",
+        "requestId": "bad-major",
+        "protocolVersion": "2.0",
+        "payload": {"sentAtMs": 1}
+      },
+      "expectedError": "UNSUPPORTED_PROTOCOL_VERSION"
+    },
+    {
+      "name": "request ID contains spaces",
+      "message": {
+        "type": "heartbeat.ping",
+        "requestId": "bad request",
+        "protocolVersion": "1.0",
+        "payload": {"sentAtMs": 1}
+      },
+      "expectedError": "INVALID_FIELD"
+    },
+    {
+      "name": "unknown message type",
+      "message": {
+        "type": "future.requiredAction",
+        "requestId": "unknown-type",
+        "protocolVersion": "1.0",
+        "payload": {}
+      },
+      "expectedError": "UNSUPPORTED_MESSAGE_TYPE"
+    },
+    {
+      "name": "missing payload",
+      "message": {
+        "type": "heartbeat.ping",
+        "requestId": "missing-payload",
+        "protocolVersion": "1.0"
+      },
+      "expectedError": "MISSING_FIELD"
+    },
+    {
+      "name": "zero viewport dimension",
+      "message": {
+        "type": "session.hello",
+        "requestId": "zero-viewport",
+        "protocolVersion": "1.0",
+        "payload": {
+          "role": "monitor",
+          "sessionId": "session_0123456789ABCDEF",
+          "supportedProtocolVersions": ["1.0"],
+          "display": {
+            "nativeWidthPx": 1179,
+            "nativeHeightPx": 2556,
+            "viewportWidthPx": 0,
+            "viewportHeightPx": 2360,
+            "orientation": "portrait"
+          },
+          "hevc": {
+            "profiles": ["main"],
+            "maxWidthPx": 3840,
+            "maxHeightPx": 2160,
+            "maxFps": 60,
+            "maxLevelIdc": 153
+          },
+          "photoReceiveEnabled": true
+        }
+      },
+      "expectedError": "INVALID_FIELD"
+    },
+    {
+      "name": "photo metadata traversal filename",
+      "message": {
+        "type": "photo.available",
+        "requestId": "traversal",
+        "protocolVersion": "1.0",
+        "payload": {
+          "metadata": {
+            "photoId": "photo_0123456789ABCDEF",
+            "fileName": "../IMG_0001.HEIC",
+            "mimeType": "image/heic",
+            "byteSize": 28,
+            "widthPx": 4032,
+            "heightPx": 3024,
+            "sha256": "ad2978fb96ca33695ff82081c97814a8d111fc652fdb975432a9cb36ee6b00ac",
+            "downloadPath": "/v1/photos/photo_0123456789ABCDEF"
+          },
+          "expiresInSeconds": 120
+        }
+      },
+      "expectedError": "INVALID_PHOTO_METADATA"
+    },
+    {
+      "name": "failed transfer missing error code",
+      "message": {
+        "type": "photo.transferResult",
+        "requestId": "missing-error-code",
+        "protocolVersion": "1.0",
+        "payload": {"photoId": "photo_0123456789ABCDEF", "status": "failed"}
+      },
+      "expectedError": "MISSING_FIELD"
+    },
+    {
+      "name": "accepted session missing ephemeral access token",
+      "message": {
+        "type": "session.accepted",
+        "requestId": "missing-token",
+        "protocolVersion": "1.0",
+        "payload": {
+          "role": "capture",
+          "sessionId": "session_0123456789ABCDEF",
+          "preview": {
+            "configId": "config-1",
+            "widthPx": 1179,
+            "heightPx": 2096,
+            "sampleAspectRatio": {"width": 1, "height": 1},
+            "fps": 30,
+            "bitrateBps": 10000000,
+            "profile": "main",
+            "levelIdc": 120,
+            "rotationDegrees": 0,
+            "clockRate": 90000,
+            "noBFrames": true
+          },
+          "rtp": {
+            "destinationAddress": "fe80::1%aware0",
+            "rtpPort": 49152,
+            "rtcpPort": 49153,
+            "payloadType": 98,
+            "ssrc": 270544960,
+            "maxRtpPacketSize": 1200
+          },
+          "photoEndpoint": {"port": 49154}
+        }
+      },
+      "expectedError": "MISSING_FIELD"
+    },
+    {
+      "name": "duplicate JSON key",
+      "wireText": "{\"type\":\"heartbeat.ping\",\"type\":\"heartbeat.pong\",\"requestId\":\"duplicate-key\",\"protocolVersion\":\"1.0\",\"payload\":{\"sentAtMs\":1}}",
+      "expectedError": "DUPLICATE_JSON_KEY"
+    },
+    {
+      "name": "non-finite JSON number",
+      "wireText": "{\"type\":\"heartbeat.ping\",\"requestId\":\"nan-number\",\"protocolVersion\":\"1.0\",\"payload\":{\"sentAtMs\":NaN}}",
+      "expectedError": "INVALID_JSON"
+    }
+  ]
+}

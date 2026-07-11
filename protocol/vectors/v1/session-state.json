@@ -1,0 +1,84 @@
+{
+  "vectorVersion": "1.0",
+  "valid": [
+    {
+      "name": "connect interrupt and retry",
+      "initial": "unpaired",
+      "events": [
+        "startDiscovery",
+        "peerSelected",
+        "pairingSucceeded",
+        "transportConnected",
+        "controlLost",
+        "retry",
+        "peerSelected",
+        "pairingSucceeded",
+        "transportConnected"
+      ],
+      "expectedStates": [
+        "discovering",
+        "pairing",
+        "connecting",
+        "connected",
+        "interrupted",
+        "discovering",
+        "pairing",
+        "connecting",
+        "connected"
+      ]
+    },
+    {
+      "name": "capability loss and restore",
+      "initial": "discovering",
+      "events": ["capabilityLost", "capabilityRestored", "startDiscovery"],
+      "expectedStates": ["unavailable", "unpaired", "discovering"]
+    },
+    {
+      "name": "pairing failure can retry",
+      "initial": "pairing",
+      "events": ["pairingFailed", "retry"],
+      "expectedStates": ["interrupted", "discovering"]
+    },
+    {
+      "name": "end is terminal",
+      "initial": "connected",
+      "events": ["end"],
+      "expectedStates": ["ended"]
+    }
+  ],
+  "invalid": [
+    {
+      "name": "cannot select before discovery",
+      "initial": "unpaired",
+      "events": ["peerSelected"],
+      "expectedErrorAt": 0,
+      "expectedError": "INVALID_STATE_TRANSITION",
+      "expectedFinalState": "unpaired"
+    },
+    {
+      "name": "transport cannot reconnect without retry",
+      "initial": "interrupted",
+      "events": ["transportConnected"],
+      "expectedErrorAt": 0,
+      "expectedError": "INVALID_STATE_TRANSITION",
+      "expectedFinalState": "interrupted"
+    },
+    {
+      "name": "ended is terminal",
+      "initial": "ended",
+      "events": ["startDiscovery"],
+      "expectedErrorAt": 0,
+      "expectedError": "INVALID_STATE_TRANSITION",
+      "expectedFinalState": "ended"
+    },
+    {
+      "name": "unknown event rejected",
+      "initial": "unpaired",
+      "events": ["teleport"],
+      "expectedErrorAt": 0,
+      "expectedError": "UNKNOWN_STATE_EVENT",
+      "expectedFinalState": "unpaired"
+    }
+  ]
+}
+

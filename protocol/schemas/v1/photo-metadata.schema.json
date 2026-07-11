@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://remote-cam-preview.example/schemas/v1/photo-metadata.schema.json",
+  "title": "Remote Cam Preview v1 photo metadata",
+  "description": "Metadata announced by photo.available before a monitor pulls a session-scoped photo.",
+  "type": "object",
+  "required": [
+    "photoId",
+    "fileName",
+    "mimeType",
+    "byteSize",
+    "widthPx",
+    "heightPx",
+    "sha256",
+    "downloadPath"
+  ],
+  "properties": {
+    "photoId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{16,128}$"
+    },
+    "fileName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255,
+      "pattern": "^[^/\\\\\\u0000-\\u001f\\u007f]+$",
+      "not": {
+        "enum": [".", ".."]
+      }
+    },
+    "mimeType": {
+      "enum": [
+        "image/jpeg",
+        "image/heic",
+        "image/heif",
+        "image/dng",
+        "image/x-adobe-dng"
+      ]
+    },
+    "byteSize": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 536870912
+    },
+    "widthPx": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "heightPx": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "downloadPath": {
+      "type": "string",
+      "pattern": "^/v1/photos/[A-Za-z0-9_-]{16,128}$",
+      "maxLength": 255
+    }
+  },
+  "additionalProperties": true,
+  "maxProperties": 32
+}
+

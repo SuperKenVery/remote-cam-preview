@@ -1,0 +1,96 @@
+{
+  "vectorVersion": "1.0",
+  "subset": "RFC 7798 non-interleaved mode without DONL/DOND or PACI",
+  "valid": [
+    {
+      "name": "single NAL unit",
+      "config": {
+        "payloadType": 98,
+        "ssrc": 270544960,
+        "initialSequence": 100,
+        "timestamp": 90000,
+        "maxRtpPacketSize": 1200,
+        "aggregate": false
+      },
+      "nalUnitsHex": ["2601aabbcc"],
+      "packetsHex": ["80e2006400015f90102030402601aabbcc"],
+      "arrivalOrder": [0],
+      "nextSequence": 101
+    },
+    {
+      "name": "VPS SPS PPS aggregation and sequence wrap",
+      "config": {
+        "payloadType": 98,
+        "ssrc": 270544960,
+        "initialSequence": 65535,
+        "timestamp": 123456,
+        "maxRtpPacketSize": 1200,
+        "aggregate": true
+      },
+      "nalUnitsHex": ["40010c01", "4201010203", "4401ff"],
+      "packetsHex": [
+        "80e2ffff0001e240102030406001000440010c010005420101020300034401ff"
+      ],
+      "arrivalOrder": [0],
+      "nextSequence": 0
+    },
+    {
+      "name": "FU fragmentation reordering and sequence wrap",
+      "config": {
+        "payloadType": 98,
+        "ssrc": 270544960,
+        "initialSequence": 65534,
+        "timestamp": 777,
+        "maxRtpPacketSize": 64,
+        "aggregate": false
+      },
+      "nalUnitsHex": [
+        "26010102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778"
+      ],
+      "packetsHex": [
+        "8062fffe00000309102030406201930102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f3031",
+        "8062ffff000003091020304062011332333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162",
+        "80e200000000030910203040620153636465666768696a6b6c6d6e6f707172737475767778"
+      ],
+      "arrivalOrder": [2, 0, 1],
+      "nextSequence": 1
+    }
+  ],
+  "invalid": [
+    {
+      "name": "missing middle FU fragment",
+      "maxRtpPacketSize": 64,
+      "packetsHex": [
+        "8062fffe00000309102030406201930102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f3031",
+        "80e200000000030910203040620153636465666768696a6b6c6d6e6f707172737475767778"
+      ],
+      "expectedError": "RTP_SEQUENCE_GAP"
+    },
+    {
+      "name": "FU end without start",
+      "maxRtpPacketSize": 1200,
+      "packetsHex": ["80e2000a000003091020304062015301"],
+      "expectedError": "MALFORMED_HEVC_FU"
+    },
+    {
+      "name": "truncated aggregation packet",
+      "maxRtpPacketSize": 1200,
+      "packetsHex": ["80e2000b0000030910203040600100054001"],
+      "expectedError": "MALFORMED_HEVC_AP"
+    },
+    {
+      "name": "aggregation header LayerId is not the lowest inner value",
+      "maxRtpPacketSize": 1200,
+      "packetsHex": [
+        "80e2000d00000309102030406009000440010c0100054201010203"
+      ],
+      "expectedError": "MALFORMED_HEVC_AP"
+    },
+    {
+      "name": "PACI is not negotiated",
+      "maxRtpPacketSize": 1200,
+      "packetsHex": ["80e2000c0000030910203040640100"],
+      "expectedError": "UNSUPPORTED_HEVC_PAYLOAD"
+    }
+  ]
+}

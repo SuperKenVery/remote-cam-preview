@@ -1,0 +1,104 @@
+{
+  "vectorVersion": "1.0",
+  "validReceiverReports": [
+    {
+      "name": "one report block with loss jitter and sender timing",
+      "packetHex": "81c900075566778810203040400000030001ffff000011941234567800008000",
+      "senderSsrc": 1432778632,
+      "blocks": [
+        {
+          "sourceSsrc": 270544960,
+          "fractionLost": 64,
+          "fractionLostRatio": 0.25,
+          "cumulativeLost": 3,
+          "extendedHighestSequence": 131071,
+          "interarrivalJitter": 4500,
+          "jitterSecondsAt90kHz": 0.05,
+          "lastSenderReport": 305419896,
+          "delaySinceLastSenderReport": 32768,
+          "delaySeconds": 0.5
+        }
+      ]
+    },
+    {
+      "name": "signed negative cumulative loss",
+      "packetHex": "81c90007556677881020304000fffffe00000001000000000000000000000000",
+      "senderSsrc": 1432778632,
+      "blocks": [
+        {
+          "sourceSsrc": 270544960,
+          "fractionLost": 0,
+          "fractionLostRatio": 0.0,
+          "cumulativeLost": -2,
+          "extendedHighestSequence": 1,
+          "interarrivalJitter": 0,
+          "jitterSecondsAt90kHz": 0.0,
+          "lastSenderReport": 0,
+          "delaySinceLastSenderReport": 0,
+          "delaySeconds": 0.0
+        }
+      ]
+    }
+  ],
+  "validPli": [
+    {
+      "name": "PSFB PLI for negotiated preview stream",
+      "packetHex": "81ce00025566778810203040",
+      "senderSsrc": 1432778632,
+      "mediaSsrc": 270544960
+    }
+  ],
+  "validDatagrams": [
+    {
+      "name": "compound RR plus PLI",
+      "datagramHex": "81c900075566778810203040400000030001ffff00001194123456780000800081ce00025566778810203040",
+      "packetKinds": ["ReceiverReport", "PictureLossIndication"]
+    }
+  ],
+  "invalid": [
+    {
+      "name": "RR length field shorter than bytes",
+      "kind": "rr",
+      "packetHex": "81c900065566778810203040400000030001ffff000011941234567800008000",
+      "expectedError": "MALFORMED_RTCP"
+    },
+    {
+      "name": "RR sender SSRC is zero",
+      "kind": "rr",
+      "packetHex": "81c900070000000010203040400000030001ffff000011941234567800008000",
+      "expectedError": "MALFORMED_RTCP"
+    },
+    {
+      "name": "RR media source SSRC is zero",
+      "kind": "rr",
+      "packetHex": "81c900075566778800000000400000030001ffff000011941234567800008000",
+      "expectedError": "MALFORMED_RTCP"
+    },
+    {
+      "name": "PLI wrong RTCP version",
+      "kind": "pli",
+      "packetHex": "41ce00025566778810203040",
+      "expectedError": "MALFORMED_RTCP"
+    },
+    {
+      "name": "PLI media SSRC is zero",
+      "kind": "pli",
+      "packetHex": "81ce00025566778800000000",
+      "expectedError": "MALFORMED_RTCP"
+    },
+    {
+      "name": "PLI media SSRC differs from negotiation",
+      "kind": "pli",
+      "packetHex": "81ce00025566778810203040",
+      "expectedMediaSsrc": 270544961,
+      "expectedError": "UNEXPECTED_RTCP_SSRC"
+    },
+    {
+      "name": "truncated second compound packet",
+      "kind": "datagram",
+      "packetHex": "81c900075566778810203040400000030001ffff00001194123456780000800081ce000255667788",
+      "expectedError": "MALFORMED_RTCP"
+    }
+  ]
+}
+

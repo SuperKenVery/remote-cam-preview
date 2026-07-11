@@ -1,0 +1,70 @@
+name: RemoteCamPreview
+
+options:
+  bundleIdPrefix: com.example
+  deploymentTarget:
+    iOS: "26.0"
+  xcodeVersion: "26.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+    TARGETED_DEVICE_FAMILY: "1,2"
+    ENABLE_USER_SCRIPT_SANDBOXING: true
+    CLANG_ENABLE_MODULES: true
+
+targets:
+  RemoteCamPreview:
+    type: application
+    platform: iOS
+    sources:
+      - path: RemoteCamPreview
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.RemoteCamPreview
+        PRODUCT_NAME: RemoteCamPreview
+        MARKETING_VERSION: 0.1.0
+        CURRENT_PROJECT_VERSION: 1
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_STYLE: Automatic
+        INFOPLIST_FILE: Config/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Config/RemoteCamPreview.entitlements
+    dependencies:
+      - sdk: AVFoundation.framework
+      - sdk: CryptoKit.framework
+      - sdk: DeviceDiscoveryUI.framework
+      - sdk: Network.framework
+      - sdk: Photos.framework
+      - sdk: VideoToolbox.framework
+      - sdk: WiFiAware.framework
+
+  RemoteCamPreviewTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: RemoteCamPreviewTests
+    resources:
+      - path: ../protocol/vectors/v1
+        excludes:
+          - session-state.json
+      - path: ../protocol/vectors/v1/session-state.json
+    dependencies:
+      - target: RemoteCamPreview
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.RemoteCamPreviewTests
+        GENERATE_INFOPLIST_FILE: true
+        CODE_SIGNING_ALLOWED: false
+
+schemes:
+  RemoteCamPreview:
+    build:
+      targets:
+        RemoteCamPreview: all
+        RemoteCamPreviewTests: [test]
+    test:
+      gatherCoverageData: true
+      targets:
+        - RemoteCamPreviewTests

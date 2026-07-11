@@ -1,0 +1,402 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://remote-cam-preview.example/schemas/v1/control-message.schema.json",
+  "title": "Remote Cam Preview v1 control message",
+  "description": "One UTF-8 JSON text message carried by /v1/events after WebSocket upgrade.",
+  "type": "object",
+  "required": ["type", "requestId", "protocolVersion", "payload"],
+  "properties": {
+    "type": {
+      "enum": [
+        "session.hello",
+        "session.accepted",
+        "preview.start",
+        "preview.stop",
+        "preview.reconfigure",
+        "preview.tierRequest",
+        "photo.receivePreference",
+        "photo.captured",
+        "photo.available",
+        "photo.transferResult",
+        "heartbeat.ping",
+        "heartbeat.pong",
+        "keyframe.request",
+        "error",
+        "session.end"
+      ]
+    },
+    "requestId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._~-]{1,64}$"
+    },
+    "protocolVersion": {
+      "type": "string",
+      "pattern": "^1\\.(0|[1-9][0-9]*)$"
+    },
+    "payload": {
+      "type": "object"
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"type": {"const": "session.hello"}}},
+      "then": {"properties": {"payload": {"$ref": "#/$defs/sessionHello"}}}
+    },
+    {
+      "if": {"properties": {"type": {"const": "session.accepted"}}},
+      "then": {"properties": {"payload": {"$ref": "#/$defs/sessionAccepted"}}}
+    },
+    {
+      "if": {"properties": {"type": {"const": "preview.start"}}},
+      "then": {"properties": {"payload": {"$ref": "#/$defs/previewStart"}}}
+    },
+    {
+      "if": {"properties": {"type": {"const": "preview.stop"}}},
+      "then": {"properties": {"payload": {"$ref": "#/$defs/previewStop"}}}
+    },
+    {
+      "if": {"properties": {"type": {"const": "preview.reconfigure"}}},
+      "then": {"properties": {"payload": {"$ref": "#/$defs/previewReconfigure"}}}
+    },
+    {
+      "if": {"properties": {"type": {"const": "preview.tierRequest"}}},
+      "then": {"properties": {"payload": {"$ref": "#/$defs/previewTierRequest"}}}
+    },
+    {
+      "if": {"properties": {"type": {"const": "photo.receivePreference"}}},
+      "then": {"properties": {"payload": {"$ref": "#/$defs/photoReceivePreference"}}}
+    },
+    {
+      "if": {"properties": {"type": {"const": "photo.captured"}}},
+      "then": {"properties": {"payload": {"$ref": "#/$defs/photoCaptured"}}}
+    },
+    {
+      "if": {"properties": {"type": {"const": "photo.available"}}},
+      "then": {"properties": {"payload": {"$ref": "#/$defs/photoAvailable"}}}
+    },
+    {
+      "if": {"properties": {"type": {"const": "photo.transferResult"}}},
+      "then": {"properties": {"payload": {"$ref": "#/$defs/photoTransferResult"}}}
+    },
+    {
+      "if": {"properties": {"type": {"enum": ["heartbeat.ping", "heartbeat.pong"]}}},
+      "then": {"properties": {"payload": {"$ref": "#/$defs/heartbeat"}}}
+    },
+    {
+      "if": {"properties": {"type": {"const": "keyframe.request"}}},
+      "then": {"properties": {"payload": {"$ref": "#/$defs/keyframeRequest"}}}
+    },
+    {
+      "if": {"properties": {"type": {"const": "error"}}},
+      "then": {"properties": {"payload": {"$ref": "#/$defs/errorPayload"}}}
+    },
+    {
+      "if": {"properties": {"type": {"const": "session.end"}}},
+      "then": {"properties": {"payload": {"$ref": "#/$defs/sessionEnd"}}}
+    }
+  ],
+  "additionalProperties": true,
+  "maxProperties": 128,
+  "$defs": {
+    "sessionToken": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{16,128}$"
+    },
+    "configId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._~-]{1,64}$"
+    },
+    "previewConfiguration": {
+      "type": "object",
+      "required": [
+        "configId",
+        "widthPx",
+        "heightPx",
+        "sampleAspectRatio",
+        "fps",
+        "bitrateBps",
+        "profile",
+        "levelIdc",
+        "rotationDegrees",
+        "clockRate",
+        "noBFrames"
+      ],
+      "properties": {
+        "configId": {"$ref": "#/$defs/configId"},
+        "widthPx": {"type": "integer", "minimum": 16, "maximum": 16384},
+        "heightPx": {"type": "integer", "minimum": 16, "maximum": 16384},
+        "sampleAspectRatio": {
+          "type": "object",
+          "required": ["width", "height"],
+          "properties": {
+            "width": {"type": "integer", "minimum": 1, "maximum": 65535},
+            "height": {"type": "integer", "minimum": 1, "maximum": 65535}
+          },
+          "additionalProperties": true,
+          "maxProperties": 128
+        },
+        "fps": {"type": "integer", "minimum": 1, "maximum": 240},
+        "bitrateBps": {"type": "integer", "minimum": 100000, "maximum": 200000000},
+        "profile": {"enum": ["main", "main10"]},
+        "levelIdc": {"type": "integer", "minimum": 30, "maximum": 186},
+        "rotationDegrees": {"enum": [0, 90, 180, 270]},
+        "clockRate": {"const": 90000},
+        "noBFrames": {"const": true}
+      },
+      "additionalProperties": true,
+      "maxProperties": 128
+    },
+    "rtpConfiguration": {
+      "type": "object",
+      "required": [
+        "destinationAddress",
+        "rtpPort",
+        "rtcpPort",
+        "payloadType",
+        "ssrc",
+        "maxRtpPacketSize"
+      ],
+      "properties": {
+        "destinationAddress": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "description": "Capture endpoint A on the current paired Wi-Fi Aware path."
+        },
+        "rtpPort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "UDP listener on A. B connects and sends one RCP1 flow probe before receiving RTP replies."
+        },
+        "rtcpPort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "UDP listener on A. B connects and sends RTCP feedback."
+        },
+        "payloadType": {"type": "integer", "minimum": 96, "maximum": 127},
+        "ssrc": {"type": "integer", "minimum": 1, "maximum": 4294967295},
+        "maxRtpPacketSize": {"type": "integer", "minimum": 256, "maximum": 65507}
+      },
+      "additionalProperties": true,
+      "maxProperties": 128
+    },
+    "sessionHello": {
+      "type": "object",
+      "required": [
+        "role",
+        "sessionId",
+        "supportedProtocolVersions",
+        "display",
+        "hevc",
+        "photoReceiveEnabled"
+      ],
+      "properties": {
+        "role": {"const": "monitor"},
+        "sessionId": {"$ref": "#/$defs/sessionToken"},
+        "supportedProtocolVersions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"}
+        },
+        "display": {
+          "type": "object",
+          "required": [
+            "nativeWidthPx",
+            "nativeHeightPx",
+            "viewportWidthPx",
+            "viewportHeightPx",
+            "orientation"
+          ],
+          "properties": {
+            "nativeWidthPx": {"type": "integer", "minimum": 1, "maximum": 16384},
+            "nativeHeightPx": {"type": "integer", "minimum": 1, "maximum": 16384},
+            "viewportWidthPx": {"type": "integer", "minimum": 1, "maximum": 16384},
+            "viewportHeightPx": {"type": "integer", "minimum": 1, "maximum": 16384},
+            "orientation": {
+              "enum": ["portrait", "portraitUpsideDown", "landscapeLeft", "landscapeRight"]
+            }
+          },
+          "additionalProperties": true,
+          "maxProperties": 128
+        },
+        "hevc": {
+          "type": "object",
+          "required": ["profiles", "maxWidthPx", "maxHeightPx", "maxFps", "maxLevelIdc"],
+          "properties": {
+            "profiles": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 2,
+              "uniqueItems": true,
+              "items": {"enum": ["main", "main10"]}
+            },
+            "maxWidthPx": {"type": "integer", "minimum": 16, "maximum": 16384},
+            "maxHeightPx": {"type": "integer", "minimum": 16, "maximum": 16384},
+            "maxFps": {"type": "integer", "minimum": 1, "maximum": 240},
+            "maxLevelIdc": {"type": "integer", "minimum": 30, "maximum": 186}
+          },
+          "additionalProperties": true,
+          "maxProperties": 128
+        },
+        "photoReceiveEnabled": {"type": "boolean"}
+      },
+      "additionalProperties": true,
+      "maxProperties": 128
+    },
+    "sessionAccepted": {
+      "type": "object",
+      "required": ["role", "sessionId", "accessToken", "preview", "rtp", "photoEndpoint"],
+      "properties": {
+        "role": {"const": "capture"},
+        "sessionId": {"$ref": "#/$defs/sessionToken"},
+        "accessToken": {"$ref": "#/$defs/sessionToken"},
+        "preview": {"$ref": "#/$defs/previewConfiguration"},
+        "rtp": {"$ref": "#/$defs/rtpConfiguration"},
+        "photoEndpoint": {
+          "type": "object",
+          "properties": {
+            "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+            "serviceName": {
+              "type": "string",
+              "pattern": "^_[A-Za-z0-9](?:[A-Za-z0-9-]{0,13}[A-Za-z0-9])?\\._tcp$",
+              "maxLength": 22
+            }
+          },
+          "oneOf": [
+            {"required": ["port"], "not": {"required": ["serviceName"]}},
+            {"required": ["serviceName"], "not": {"required": ["port"]}}
+          ],
+          "additionalProperties": true,
+          "maxProperties": 16
+        }
+      },
+      "additionalProperties": true,
+      "maxProperties": 128
+    },
+    "previewStart": {
+      "type": "object",
+      "required": ["configId"],
+      "properties": {"configId": {"$ref": "#/$defs/configId"}},
+      "additionalProperties": true,
+      "maxProperties": 128
+    },
+    "previewStop": {
+      "type": "object",
+      "required": ["reason"],
+      "properties": {
+        "reason": {"enum": ["user", "reconfigure", "controlLost", "sessionEnd", "error"]}
+      },
+      "additionalProperties": true,
+      "maxProperties": 128
+    },
+    "previewReconfigure": {
+      "type": "object",
+      "required": ["preview", "reason"],
+      "properties": {
+        "preview": {"$ref": "#/$defs/previewConfiguration"},
+        "reason": {"enum": ["orientation", "viewport", "decoderLimit", "linkTier", "manual"]}
+      },
+      "additionalProperties": true,
+      "maxProperties": 128
+    },
+    "previewTierRequest": {
+      "type": "object",
+      "required": ["maxBitrateBps"],
+      "properties": {
+        "maxBitrateBps": {"type": "integer", "minimum": 100000, "maximum": 200000000},
+        "maxWidthPx": {"type": "integer", "minimum": 16, "maximum": 16384},
+        "maxHeightPx": {"type": "integer", "minimum": 16, "maximum": 16384}
+      },
+      "additionalProperties": true,
+      "maxProperties": 128
+    },
+    "photoReceivePreference": {
+      "type": "object",
+      "required": ["enabled"],
+      "properties": {"enabled": {"type": "boolean"}},
+      "additionalProperties": true,
+      "maxProperties": 128
+    },
+    "photoCaptured": {
+      "type": "object",
+      "required": ["captureId", "savedLocally"],
+      "properties": {
+        "captureId": {"$ref": "#/$defs/configId"},
+        "savedLocally": {"type": "boolean"}
+      },
+      "additionalProperties": true,
+      "maxProperties": 128
+    },
+    "photoAvailable": {
+      "type": "object",
+      "required": ["metadata", "expiresInSeconds"],
+      "properties": {
+        "metadata": {"$ref": "photo-metadata.schema.json"},
+        "expiresInSeconds": {"type": "integer", "minimum": 1, "maximum": 3600}
+      },
+      "additionalProperties": true,
+      "maxProperties": 128
+    },
+    "photoTransferResult": {
+      "type": "object",
+      "required": ["photoId", "status"],
+      "properties": {
+        "photoId": {"$ref": "#/$defs/sessionToken"},
+        "status": {"enum": ["saved", "failed", "cancelled"]},
+        "errorCode": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{1,63}$"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"enum": ["failed", "cancelled"]}}},
+          "then": {"required": ["errorCode"]}
+        }
+      ],
+      "additionalProperties": true,
+      "maxProperties": 128
+    },
+    "heartbeat": {
+      "type": "object",
+      "required": ["sentAtMs"],
+      "properties": {
+        "sentAtMs": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807}
+      },
+      "additionalProperties": true,
+      "maxProperties": 128
+    },
+    "keyframeRequest": {
+      "type": "object",
+      "required": ["mediaSsrc", "reason"],
+      "properties": {
+        "mediaSsrc": {"type": "integer", "minimum": 1, "maximum": 4294967295},
+        "reason": {"enum": ["startup", "loss", "decoderReset", "reconfigure"]}
+      },
+      "additionalProperties": true,
+      "maxProperties": 128
+    },
+    "errorPayload": {
+      "type": "object",
+      "required": ["code", "message", "retryable"],
+      "properties": {
+        "code": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{1,63}$"},
+        "message": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "retryable": {"type": "boolean"},
+        "relatedRequestId": {"type": "string", "pattern": "^[A-Za-z0-9._~-]{1,64}$"}
+      },
+      "additionalProperties": true,
+      "maxProperties": 128
+    },
+    "sessionEnd": {
+      "type": "object",
+      "required": ["reason"],
+      "properties": {
+        "reason": {"enum": ["user", "controlLost", "unavailable", "error"]}
+      },
+      "additionalProperties": true,
+      "maxProperties": 128
+    }
+  }
+}

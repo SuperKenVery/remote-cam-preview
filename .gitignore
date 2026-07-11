@@ -1,0 +1,29 @@
+# macOS / Xcode
+.DS_Store
+DerivedData/
+*.xcuserstate
+xcuserdata/
+ios/RemoteCamPreview.xcodeproj/
+
+# Android / Gradle
+.gradle/
+**/build/
+android/local.properties
+*.iml
+.idea/
+
+# Nix
+.direnv/
+result
+result-*
+
+# Protocol tests
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Runtime captures and device logs
+artifacts/
+captures/
+*.trace
+*.memgraph
