@@ -12,6 +12,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.annotation.DrawableRes
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -62,10 +63,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -79,6 +83,20 @@ import dev.remotecam.preview.camera.CameraControllerListener
 import dev.remotecam.preview.model.DeviceRole
 import dev.remotecam.preview.photo.ReceivedPhoto
 import dev.remotecam.preview.session.SessionState
+
+private data class PoseRecommendation(
+    @DrawableRes val sampleRes: Int,
+    @DrawableRes val guideRes: Int,
+    val title: String,
+)
+
+private val poseRecommendations = listOf(
+    PoseRecommendation(R.drawable.pose_sample_1, R.drawable.pose_guide_1, "交叉手脚"),
+    PoseRecommendation(R.drawable.pose_sample_2, R.drawable.pose_guide_2, "比耶翘脚"),
+    PoseRecommendation(R.drawable.pose_sample_3, R.drawable.pose_guide_3, "自然侧身"),
+    PoseRecommendation(R.drawable.pose_sample_4, R.drawable.pose_guide_4, "轻松站姿"),
+    PoseRecommendation(R.drawable.pose_sample_5, R.drawable.pose_guide_5, "活力姿势"),
+)
 
 class MainActivity : ComponentActivity() {
     private val viewModel: RemoteCamViewModel by viewModels()
@@ -288,6 +306,7 @@ private fun CameraScreen(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     var ready by remember { mutableStateOf(false) }
+    var selectedPose by remember { mutableStateOf<Int?>(null) }
     val controller = remember {
         CameraController(context, lifecycleOwner, object : CameraControllerListener {
             override fun onCameraReady() { ready = true }
@@ -304,6 +323,9 @@ private fun CameraScreen(
                     modifier = Modifier.fillMaxSize(),
                 update = { controller.bind(it, videoOutput) },
             )
+                selectedPose?.let { index ->
+                    PoseGuideOverlay(poseRecommendations[index])
+                }
                 Row(
                     Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 8.dp, vertical = 6.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -328,13 +350,50 @@ private fun CameraScreen(
                     )
                 }
             }
-            CameraControls(ready = ready, status = status, onShutter = controller::takePhoto)
+            CameraControls(
+                ready = ready,
+                status = status,
+                selectedPose = selectedPose,
+                onPoseClick = { index -> selectedPose = if (selectedPose == index) null else index },
+                onShutter = controller::takePhoto,
+            )
         }
     }
 }
 
 @Composable
-private fun CameraControls(ready: Boolean, status: String, onShutter: () -> Unit) {
+private fun PoseGuideOverlay(pose: PoseRecommendation) {
+    // Source guides are black on opaque white. Map luminance to alpha so the white
+    // background disappears, while drawing the guide itself as a translucent white line.
+    val guideFilter = remember {
+        ColorFilter.colorMatrix(
+            ColorMatrix(
+                floatArrayOf(
+                    0f, 0f, 0f, 0f, 255f,
+                    0f, 0f, 0f, 0f, 255f,
+                    0f, 0f, 0f, 0f, 255f,
+                    -0.275f, -0.275f, -0.275f, 0f, 210f,
+                ),
+            ),
+        )
+    }
+    Image(
+        painter = painterResource(pose.guideRes),
+        contentDescription = "${pose.title}姿势线框",
+        contentScale = ContentScale.Fit,
+        colorFilter = guideFilter,
+        modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp, vertical = 42.dp),
+    )
+}
+
+@Composable
+private fun CameraControls(
+    ready: Boolean,
+    status: String,
+    selectedPose: Int?,
+    onPoseClick: (Int) -> Unit,
+    onShutter: () -> Unit,
+) {
     Column(
         Modifier.fillMaxWidth().background(Color(0xff0d0d0f)).navigationBarsPadding().padding(top = 12.dp, bottom = 14.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -345,11 +404,13 @@ private fun CameraControls(ready: Boolean, status: String, onShutter: () -> Unit
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 14.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            PoseSuggestion("🧍", "自然站姿", Color(0xff7258e8))
-            PoseSuggestion("✌️", "俏皮比耶", Color(0xffe15e85))
-            PoseSuggestion("🪑", "侧坐回眸", Color(0xff327d8c))
-            PoseSuggestion("🙆", "举手伸展", Color(0xffb36a2e))
-            PoseSuggestion("🚶", "抓拍走动", Color(0xff3f6fb5))
+            poseRecommendations.forEachIndexed { index, pose ->
+                PoseSuggestion(
+                    pose = pose,
+                    selected = selectedPose == index,
+                    onClick = { onPoseClick(index) },
+                )
+            }
         }
         Spacer(Modifier.height(16.dp))
         Box(Modifier.fillMaxWidth().height(82.dp)) {
@@ -381,14 +442,26 @@ private fun CameraControls(ready: Boolean, status: String, onShutter: () -> Unit
 }
 
 @Composable
-private fun PoseSuggestion(emoji: String, title: String, color: Color) {
-    Column(
-        Modifier.width(92.dp).background(color.copy(alpha = .3f), RoundedCornerShape(16.dp)).clickable { }.padding(vertical = 10.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
+private fun PoseSuggestion(pose: PoseRecommendation, selected: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier.width(90.dp).height(108.dp)
+            .border(if (selected) 3.dp else 1.dp, if (selected) Color(0xffffd54f) else Color.White.copy(alpha = .2f), RoundedCornerShape(15.dp))
+            .padding(if (selected) 3.dp else 1.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick),
     ) {
-        Text(emoji, fontSize = 25.sp)
-        Spacer(Modifier.height(4.dp))
-        Text(title, color = Color.White, style = MaterialTheme.typography.labelMedium)
+        Image(
+            painter = painterResource(pose.sampleRes),
+            contentDescription = pose.title,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize(),
+        )
+        Box(
+            Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Color.Black.copy(alpha = .62f)).padding(vertical = 5.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(pose.title, color = Color.White, style = MaterialTheme.typography.labelSmall)
+        }
     }
 }
 
