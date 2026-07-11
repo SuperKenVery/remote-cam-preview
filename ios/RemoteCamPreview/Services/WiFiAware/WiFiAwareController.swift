@@ -25,6 +25,7 @@ final class WiFiAwareController {
         case rtpPacket(RTPPacket)
         case keyFrameRequested
         case message(ControlMessage)
+        case diagnostic(SessionErrorReport)
     }
 
     static let serviceName = "_remote-cam._tcp"
@@ -32,7 +33,7 @@ final class WiFiAwareController {
     static let rtpServiceName = "_remote-preview._udp"
     static let rtcpServiceName = "_remote-feedback._udp"
 
-    private(set) var pairedDeviceCount = 0
+    private(set) var pairedDevices: [WAPairedDevice] = []
     private(set) var discoveredEndpoints: [WAEndpoint] = []
 
     private let controlChannel = ControlChannel()
@@ -78,6 +79,7 @@ final class WiFiAwareController {
     }
 
     func startPublishing(
+        to peer: WAPairedDevice,
         localRole: DeviceRole,
         receivePhotos: Bool,
         eventHandler: @escaping @MainActor (Event) -> Void
@@ -98,7 +100,7 @@ final class WiFiAwareController {
             let provider: WAPublisherListener = .wifiAware(
                 .connecting(
                     to: service,
-                    from: .userSpecifiedDevices,
+                    from: .selected([peer]),
                     datapath: .realtime
                 )
             )
@@ -157,10 +159,22 @@ final class WiFiAwareController {
                 } catch {
                     await self?.controlChannel.detach()
                     self?.invalidateSessionResources()
+                    eventHandler(.diagnostic(Self.diagnostic(
+                        error,
+                        title: "控制连接中断",
+                        stage: localRole == .camera ? "拍摄端控制会话" : "监看端控制会话",
+                        suggestion: Self.controlSuggestion(for: error)
+                    )))
                     eventHandler(.interrupted(reason: error.localizedDescription))
                 }
             }
         } catch {
+            eventHandler(.diagnostic(Self.diagnostic(
+                error,
+                title: "无法启动控制服务",
+                stage: "拍摄端 Wi-Fi Aware 监听器",
+                suggestion: "确认两台设备已完成系统配对、Wi-Fi 已开启，然后结束会话并重试。"
+            )))
             eventHandler(.failed(availability: nil, reason: error.localizedDescription))
         }
     }
@@ -198,6 +212,12 @@ final class WiFiAwareController {
             } catch {
                 await self?.controlChannel.detach()
                 self?.invalidateSessionResources()
+                eventHandler(.diagnostic(Self.diagnostic(
+                    error,
+                    title: "发现对端失败",
+                    stage: "Wi-Fi Aware 服务发现",
+                    suggestion: "让发布端保持在等待页面，确认两台设备的系统配对仍有效后重试。"
+                )))
                 eventHandler(.interrupted(reason: error.localizedDescription))
             }
         }
@@ -265,6 +285,12 @@ final class WiFiAwareController {
             } catch {
                 await controlChannel.detach()
                 invalidateSessionResources()
+                eventHandler(.diagnostic(Self.diagnostic(
+                    error,
+                    title: "控制连接中断",
+                    stage: localRole == .camera ? "拍摄端控制会话" : "监看端控制会话",
+                    suggestion: Self.controlSuggestion(for: error)
+                )))
                 eventHandler(.interrupted(reason: error.localizedDescription))
             }
         }
@@ -381,7 +407,7 @@ final class WiFiAwareController {
         pairedDevicesTask = Task { [weak self] in
             do {
                 for try await devices in WAPairedDevice.allDevices {
-                    self?.pairedDeviceCount = devices.count
+                    self?.pairedDevices = devices.values.sorted { $0.id < $1.id }
                 }
             } catch {
                 // The connection flow surfaces actionable framework errors.
@@ -395,6 +421,12 @@ final class WiFiAwareController {
         previewTransport.onRTPPacket = { packet in eventHandler(.rtpPacket(packet)) }
         previewTransport.onKeyFrameRequested = { eventHandler(.keyFrameRequested) }
         previewTransport.onError = { error in
+            eventHandler(.diagnostic(Self.diagnostic(
+                error,
+                title: "实时预览通道失败",
+                stage: "HEVC RTP/RTCP 附加数据路径",
+                suggestion: "保持两台设备解锁且距离较近，结束当前会话后重新连接。"
+            )))
             eventHandler(.interrupted(reason: "实时预览通道失败：\(error.localizedDescription)"))
         }
     }
@@ -535,6 +567,12 @@ final class WiFiAwareController {
                 }
             } catch {
                 invalidateSessionResources()
+                eventHandler(.diagnostic(Self.diagnostic(
+                    error,
+                    title: "会话协商失败",
+                    stage: "拍摄端处理 session.hello",
+                    suggestion: "拍摄端未能及时建立 RTP、RTCP 或照片监听器。保持两台设备解锁后重试。"
+                )))
                 eventHandler(.interrupted(reason: error.localizedDescription))
             }
         } else if message.type == "session.accepted", localRole == .monitor {
@@ -581,6 +619,12 @@ final class WiFiAwareController {
                 try await controlChannel.send(.previewStart(configId: negotiatedPreview.configId))
             } catch {
                 invalidateSessionResources()
+                eventHandler(.diagnostic(Self.diagnostic(
+                    error,
+                    title: "预览连接失败",
+                    stage: "监看端处理 session.accepted",
+                    suggestion: "监看端未能建立协商后的 RTP/RTCP 数据路径。确认两端系统版本与 Wi-Fi Aware 配对状态后重试。"
+                )))
                 eventHandler(.interrupted(reason: error.localizedDescription))
             }
         } else if message.type == "preview.start", localRole == .camera {
@@ -839,6 +883,41 @@ final class WiFiAwareController {
 
     private static func makeConfigId() -> String {
         "config_" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+    }
+
+    private static func diagnostic(
+        _ error: Error,
+        title: String,
+        stage: String,
+        suggestion: String
+    ) -> SessionErrorReport {
+        if let networkError = error as? NWError,
+           let awareError = networkError.wifiAware {
+            return SessionErrorReport(
+                title: title,
+                stage: stage,
+                message: awareError.localizedDescription,
+                domain: "WiFiAware.WAError",
+                code: networkError.errorCode,
+                underlyingDomain: "Network.NWError",
+                underlyingCode: networkError.errorCode,
+                underlyingMessage: networkError.localizedDescription,
+                suggestion: suggestion
+            )
+        }
+        return SessionErrorReport(
+            error: error,
+            title: title,
+            stage: stage,
+            suggestion: suggestion
+        )
+    }
+
+    private static func controlSuggestion(for error: Error) -> String {
+        if error is ControlChannelError {
+            return "控制消息未在限定时间内完成。若发生在等待控制消息阶段，通常表示拍摄端仍在创建 RTP、RTCP 或照片附加连接；保持两端解锁并重试。"
+        }
+        return "确认两台设备保持解锁、Wi-Fi 已开启且系统配对仍有效，然后结束会话并重试。"
     }
 
 }

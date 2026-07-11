@@ -1,9 +1,9 @@
 package dev.remotecam.preview.network
 
 import android.net.Network
-import android.net.Uri
 import dev.remotecam.preview.photo.PhotoDescriptor
 import dev.remotecam.preview.photo.PhotoReceiver
+import dev.remotecam.preview.photo.ReceivedPhoto
 import dev.remotecam.preview.protocol.ControlEnvelope
 import dev.remotecam.preview.protocol.ControlMessageCodec
 import java.net.Inet6Address
@@ -90,7 +90,7 @@ class SessionClient(
     fun send(message: ControlEnvelope): Boolean =
         webSocket?.send(ControlMessageCodec.encode(message).decodeToString()) == true
 
-    suspend fun pullPhoto(descriptor: PhotoDescriptor, receiver: PhotoReceiver): Uri = withContext(Dispatchers.IO) {
+    suspend fun pullPhoto(descriptor: PhotoDescriptor, receiver: PhotoReceiver): ReceivedPhoto = withContext(Dispatchers.IO) {
         descriptor.validate()
         val token = requireNotNull(accessToken.get()) { "session.accepted has not supplied an access token" }
         val endpointPort = photoPort.get().takeIf { it in 1..65_535 }

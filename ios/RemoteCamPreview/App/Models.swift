@@ -33,6 +33,67 @@ enum AppRoute: Hashable {
     case session
 }
 
+struct SessionErrorReport: Identifiable, Equatable, Sendable {
+    let id: UUID
+    let title: String
+    let stage: String
+    let message: String
+    let domain: String
+    let code: Int
+    let underlyingDomain: String?
+    let underlyingCode: Int?
+    let underlyingMessage: String?
+    let suggestion: String
+
+    init(
+        error: Error,
+        title: String,
+        stage: String,
+        suggestion: String
+    ) {
+        let nsError = error as NSError
+        let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError
+        self.init(
+            title: title,
+            stage: stage,
+            message: nsError.localizedDescription,
+            domain: nsError.domain,
+            code: nsError.code,
+            underlyingDomain: underlying?.domain,
+            underlyingCode: underlying?.code,
+            underlyingMessage: underlying?.localizedDescription,
+            suggestion: suggestion
+        )
+    }
+
+    init(
+        title: String,
+        stage: String,
+        message: String,
+        domain: String = "RemoteCamPreview",
+        code: Int = 0,
+        underlyingDomain: String? = nil,
+        underlyingCode: Int? = nil,
+        underlyingMessage: String? = nil,
+        suggestion: String
+    ) {
+        id = UUID()
+        self.title = title
+        self.stage = stage
+        self.message = message
+        self.domain = domain
+        self.code = code
+        self.underlyingDomain = underlyingDomain
+        self.underlyingCode = underlyingCode
+        self.underlyingMessage = underlyingMessage
+        self.suggestion = suggestion
+    }
+
+    var compactReason: String {
+        "\(stage)：\(message) [\(domain) \(code)]"
+    }
+}
+
 enum SessionPhase: Equatable, Sendable {
     case checkingCapability
     case unavailable(WiFiAwareAvailability)
@@ -139,4 +200,3 @@ struct CaptureFormatCandidate: Equatable, Sendable {
     var dimensions: PixelDimensions
     var maximumFramesPerSecond: Int
 }
-

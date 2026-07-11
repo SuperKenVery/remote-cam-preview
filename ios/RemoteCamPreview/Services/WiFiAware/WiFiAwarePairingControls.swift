@@ -4,9 +4,10 @@ import WiFiAware
 
 struct WiFiAwarePairingControls: View {
     let role: DeviceRole
+    let pairedDevices: [WAPairedDevice]
     let onPairingPresented: () -> Void
     let onPairingDismissed: () -> Void
-    let onStartPublishing: () -> Void
+    let onStartPublishing: (WAPairedDevice) -> Void
     let onEndpointSelected: (WAEndpoint) -> Void
 
     var body: some View {
@@ -17,7 +18,7 @@ struct WiFiAwarePairingControls: View {
                         .wifiAware(
                             .connecting(
                                 to: publishService,
-                                from: .selected([]),
+                                from: .userSpecifiedDevices,
                                 datapath: .realtime
                             )
                         ),
@@ -31,11 +32,24 @@ struct WiFiAwarePairingControls: View {
                     .simultaneousGesture(TapGesture().onEnded(onPairingPresented))
                     .buttonStyle(.bordered)
 
-                    Button(action: onStartPublishing) {
-                        Label("等待监看端连接", systemImage: "antenna.radiowaves.left.and.right")
-                            .frame(maxWidth: .infinity)
+                    if pairedDevices.isEmpty {
+                        Text("请先通过系统界面与监看端配对。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(pairedDevices) { peer in
+                            Button {
+                                onStartPublishing(peer)
+                            } label: {
+                                Label(
+                                    "等待 \(peer.name ?? "已配对设备") 连接",
+                                    systemImage: "antenna.radiowaves.left.and.right"
+                                )
+                                .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.borderedProminent)
+                        }
                     }
-                    .buttonStyle(.borderedProminent)
 
                     Text("拍摄端提供本次会话的控制、预览和成片服务。")
                         .font(.caption)
@@ -43,7 +57,7 @@ struct WiFiAwarePairingControls: View {
                 } else {
                     DevicePicker(
                         .wifiAware(
-                            .connecting(to: .selected([]), from: subscribeService)
+                            .connecting(to: .userSpecifiedDevices, from: subscribeService)
                         ),
                         access: .permanent,
                         onSelect: { endpoint in

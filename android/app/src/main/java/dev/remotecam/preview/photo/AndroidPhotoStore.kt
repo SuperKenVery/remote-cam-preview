@@ -15,6 +15,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 data class StagedPhoto(val file: File, val descriptor: PhotoDescriptor)
+data class ReceivedPhoto(val file: File, val descriptor: PhotoDescriptor)
 
 class PhotoStager(private val context: Context) {
     suspend fun stage(uri: Uri): StagedPhoto = withContext(Dispatchers.IO) {
@@ -117,17 +118,37 @@ class PhotoResourceRegistry(
 }
 
 class PhotoReceiver(private val context: Context) {
-    /** Verifies into a private temporary file before the first byte reaches MediaStore. */
-    suspend fun receive(input: InputStream, descriptor: PhotoDescriptor): Uri = withContext(Dispatchers.IO) {
+    private val incomingDirectory = File(context.cacheDir, "incoming-photos").apply {
+        mkdirs()
+        listFiles()?.forEach(File::delete)
+    }
+
+    /** Verifies into a private cache file. Nothing reaches MediaStore until the user saves it. */
+    suspend fun receive(input: InputStream, descriptor: PhotoDescriptor): ReceivedPhoto = withContext(Dispatchers.IO) {
         descriptor.validate()
-        val temp = File.createTempFile("incoming-photo-", ".part", context.cacheDir)
+        val suffix = when (descriptor.mimeType) {
+            "image/png" -> ".png"
+            "image/webp" -> ".webp"
+            else -> ".jpg"
+        }
+        val temp = File.createTempFile("incoming-photo-", suffix, incomingDirectory)
         try {
             temp.outputStream().buffered().use { output ->
                 PhotoIntegrity.verifyAndCopy(input, output, descriptor.byteSize, descriptor.sha256)
             }
+            ReceivedPhoto(temp, descriptor)
+        } catch (error: Throwable) {
+            temp.delete()
+            throw error
+        }
+    }
+
+    /** Copies an already verified private photo into the public system photo library. */
+    suspend fun saveToGallery(photo: ReceivedPhoto): Uri = withContext(Dispatchers.IO) {
+        require(photo.file.isFile) { "Received photo cache is unavailable" }
             val values = ContentValues().apply {
-                put(MediaStore.Images.Media.DISPLAY_NAME, descriptor.fileName)
-                put(MediaStore.Images.Media.MIME_TYPE, descriptor.mimeType)
+                put(MediaStore.Images.Media.DISPLAY_NAME, photo.descriptor.fileName)
+                put(MediaStore.Images.Media.MIME_TYPE, photo.descriptor.mimeType)
                 put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/Remote Cam Preview")
                 put(MediaStore.Images.Media.IS_PENDING, 1)
             }
@@ -138,7 +159,7 @@ class PhotoReceiver(private val context: Context) {
             try {
                 resolver.openOutputStream(uri, "w").use { output ->
                     requireNotNull(output) { "Unable to open MediaStore destination" }
-                    temp.inputStream().buffered().use { it.copyTo(output, 64 * 1024) }
+                    photo.file.inputStream().buffered().use { it.copyTo(output, 64 * 1024) }
                 }
                 resolver.update(uri, ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }, null, null)
                 uri
@@ -146,8 +167,9 @@ class PhotoReceiver(private val context: Context) {
                 resolver.delete(uri, null, null)
                 throw error
             }
-        } finally {
-            temp.delete()
-        }
+    }
+
+    fun delete(photo: ReceivedPhoto) {
+        photo.file.delete()
     }
 }

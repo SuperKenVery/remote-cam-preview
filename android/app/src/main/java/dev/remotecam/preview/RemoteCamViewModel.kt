@@ -4,6 +4,7 @@ import android.app.Application
 import android.net.ConnectivityManager
 import android.net.Uri
 import android.net.wifi.aware.WifiAwareManager
+import android.util.Log
 import android.view.Surface
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -45,6 +46,7 @@ import dev.remotecam.preview.photo.PhotoDescriptor
 import dev.remotecam.preview.photo.PhotoReceiver
 import dev.remotecam.preview.photo.PhotoResourceRegistry
 import dev.remotecam.preview.photo.PhotoStager
+import dev.remotecam.preview.photo.ReceivedPhoto
 import dev.remotecam.preview.protocol.AnnexB
 import dev.remotecam.preview.protocol.ControlEnvelope
 import dev.remotecam.preview.protocol.ControlTypes
@@ -85,6 +87,8 @@ private const val RTP_PORT = 49_152
 private const val RTCP_PORT = 49_153
 private const val RTP_PAYLOAD_TYPE = 98
 private const val MAX_RTP_PACKET_SIZE = 1200
+private const val MEDIA_LOG_TAG = "RemoteCamMedia"
+private const val DEBUG_LOCAL_ENCODER = true
 
 data class RemoteCamUiState(
     val capabilities: DeviceCapabilityReport,
@@ -95,11 +99,14 @@ data class RemoteCamUiState(
     val receivePhotos: Boolean = true,
     val lastPhotoStatus: String? = null,
     val dataPath: AwareDataPath? = null,
-    val sessionPassphrase: String = "",
+    val sessionPassphrase: String = "12345678",
     val monitorViewport: PixelSize? = null,
     val cameraVideoOutput: HevcVideoOutput? = null,
     val negotiatedProfile: StreamProfile? = null,
     val receivedFrames: Long = 0,
+    val receivedPhotos: List<ReceivedPhoto> = emptyList(),
+    val savedPhotoIds: Set<String> = emptySet(),
+    val savingReceivedPhotos: Boolean = false,
 )
 
 class RemoteCamViewModel(application: Application) : AndroidViewModel(application), WifiAwareListener {
@@ -183,6 +190,26 @@ class RemoteCamViewModel(application: Application) : AndroidViewModel(applicatio
                 status = if (role == DeviceRole.CAMERA) "拍摄端：本机拍照并发送实时预览" else "监看端：显示远端预览",
             )
         }
+        if (DEBUG_LOCAL_ENCODER && role == DeviceRole.CAMERA) startLocalEncoderDebug()
+    }
+
+    private fun startLocalEncoderDebug() {
+        val capability = checker.cameraStreamCapability()
+        val size = capability.captureSizes
+            .filter { it.width <= 1_920 && it.height <= 1_080 }
+            .maxByOrNull { it.pixels }
+            ?: capability.captureSizes.minByOrNull { it.pixels }
+            ?: return updateUi { it.copy(status = "本地编码调试失败：没有相机/HEVC 公共尺寸") }
+        val profile = StreamProfile(
+            size = size,
+            frameRate = minOf(30, capability.hevcEncoder.maxFps),
+            bitRate = 10_000_000,
+        )
+        Log.i(MEDIA_LOG_TAG, "DEBUG local encoder bypass enabled profile=${size.width}x${size.height}@${profile.frameRate}")
+        createCameraEncoder(profile)
+        updateUi {
+            it.copy(status = "DEBUG：跳过监看端，正在本机编码 ${size.width}×${size.height}@${profile.frameRate}")
+        }
     }
 
     fun setSessionPassphrase(value: String) {
@@ -264,12 +291,13 @@ class RemoteCamViewModel(application: Application) : AndroidViewModel(applicatio
         closingTransport = false
         machine = SessionStateMachine()
         selectedPeerId = null
+        clearReceivedPhotos()
         updateUi {
             it.copy(
                 role = null,
                 sessionState = SessionState.UNPAIRED,
                 peers = emptyList(),
-                sessionPassphrase = "",
+                sessionPassphrase = "12345678",
                 status = "旧会话资源已撤销，请重新选择角色",
                 dataPath = null,
             )
@@ -291,6 +319,44 @@ class RemoteCamViewModel(application: Application) : AndroidViewModel(applicatio
                     payload = buildJsonObject { put("enabled", enabled) },
                 ),
             )
+        }
+    }
+
+    fun saveAllReceivedPhotos() {
+        val current = _uiState.value
+        if (current.savingReceivedPhotos) return
+        val pending = current.receivedPhotos.filter { it.descriptor.photoId !in current.savedPhotoIds }
+        if (pending.isEmpty()) {
+            updateUi { it.copy(lastPhotoStatus = "所有接收照片均已保存到相册") }
+            return
+        }
+        updateUi { it.copy(savingReceivedPhotos = true, lastPhotoStatus = "正在保存 0/${pending.size} 张照片…") }
+        viewModelScope.launch {
+            var saved = 0
+            var failed = 0
+            pending.forEach { photo ->
+                runCatching { photoReceiver.saveToGallery(photo) }
+                    .onSuccess {
+                        saved++
+                        updateUi { state ->
+                            state.copy(
+                                savedPhotoIds = state.savedPhotoIds + photo.descriptor.photoId,
+                                lastPhotoStatus = "正在保存 $saved/${pending.size} 张照片…",
+                            )
+                        }
+                    }
+                    .onFailure { failed++ }
+            }
+            updateUi {
+                it.copy(
+                    savingReceivedPhotos = false,
+                    lastPhotoStatus = if (failed == 0) {
+                        "已将 $saved 张照片保存到系统相册"
+                    } else {
+                        "已保存 $saved 张，$failed 张保存失败"
+                    },
+                )
+            }
         }
     }
 
@@ -391,6 +457,7 @@ class RemoteCamViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     override fun onDataPathAvailable(peerId: String, dataPath: AwareDataPath) {
+        Log.i(MEDIA_LOG_TAG, "NDP available role=${_uiState.value.role} local=${dataPath.localAddress} peer=${dataPath.peerAddress} port=${dataPath.advertisedPeerPort}")
         if (_uiState.value.dataPath?.network == dataPath.network) return
         val local = dataPath.localAddress
         if (local == null) {
@@ -701,11 +768,13 @@ class RemoteCamViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     private fun createCameraEncoder(profile: StreamProfile) {
+        Log.i(MEDIA_LOG_TAG, "creating camera HEVC output profile=${profile.size.width}x${profile.size.height}@${profile.frameRate}")
         encoderOutput?.close()
         encoderParameterSets = null
         val output = HevcVideoOutput(
             HevcEncoder(profile, object : HevcEncoderListener {
                 override fun onEncoderReady(actualSize: PixelSize) {
+                    Log.i(MEDIA_LOG_TAG, "HEVC encoder surface ready actual=${actualSize.width}x${actualSize.height}")
                     if (actualSize != profile.size) {
                         previewStreaming.set(false)
                         val detail = "CameraX 输出 ${actualSize.width}×${actualSize.height}，与已协商的 ${profile.size.width}×${profile.size.height} 不一致"
@@ -729,6 +798,7 @@ class RemoteCamViewModel(application: Application) : AndroidViewModel(applicatio
                 }
 
                 override fun onParameterSets(parameters: CodecParameterSets) {
+                    Log.i(MEDIA_LOG_TAG, "HEVC parameter sets received sizes=${parameters.buffers.map(ByteArray::size)}")
                     encoderParameterSets = parameters
                 }
 
@@ -750,6 +820,7 @@ class RemoteCamViewModel(application: Application) : AndroidViewModel(applicatio
             preferredSize = profile.size,
         )
         encoderOutput = output
+        Log.i(MEDIA_LOG_TAG, "cameraVideoOutput published to Compose")
         updateUi { it.copy(cameraVideoOutput = output) }
     }
 
@@ -767,6 +838,7 @@ class RemoteCamViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     private fun configureMonitorPreview(accepted: ControlEnvelope, dataPath: AwareDataPath) {
+        Log.i(MEDIA_LOG_TAG, "configuring monitor RTP receiver")
         if (accepted.payload["sessionId"]!!.jsonPrimitive.content != monitorSessionId) {
             updateUi { it.copy(status = "对端回显的 session ID 不匹配，已拒绝") }
             sessionClient?.close()
@@ -853,6 +925,7 @@ class RemoteCamViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     private fun handleReceivedFrame(frame: DepacketizedFrame) {
+        Log.i(MEDIA_LOG_TAG, "depacketized frame timestamp=${frame.timestamp} bytes=${frame.annexB.size} damaged=${frame.damaged}")
         if (frame.damaged) {
             requestKeyFrame("loss")
             return
@@ -923,7 +996,18 @@ class RemoteCamViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             val result = runCatching { requireNotNull(sessionClient).pullPhoto(descriptor, photoReceiver) }
             if (result.isSuccess) {
-                updateUi { it.copy(lastPhotoStatus = "成片校验一致并已保存到本机相册") }
+                val photo = result.getOrThrow()
+                updateUi { state ->
+                    if (state.receivedPhotos.any { it.descriptor.photoId == photo.descriptor.photoId }) {
+                        photoReceiver.delete(photo)
+                        state
+                    } else {
+                        state.copy(
+                            receivedPhotos = state.receivedPhotos + photo,
+                            lastPhotoStatus = "已接收并校验 ${state.receivedPhotos.size + 1} 张照片",
+                        )
+                    }
+                }
                 sessionClient?.send(photoTransferResult(descriptor.photoId, "saved", null))
             } else {
                 updateUi { it.copy(lastPhotoStatus = "成片接收失败：${result.exceptionOrNull()?.message}") }
@@ -960,6 +1044,7 @@ class RemoteCamViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     override fun onDataPathLost(peerId: String) {
+        Log.w(MEDIA_LOG_TAG, "NDP lost peer=$peerId state=${machine.state}")
         closeTransport()
         if (machine.state == SessionState.CONNECTED) safeApply(SessionEvent.CONTROL_LOST)
         updateUi { it.copy(dataPath = null, status = "连接中断，可重试或结束") }
@@ -1037,11 +1122,23 @@ class RemoteCamViewModel(application: Application) : AndroidViewModel(applicatio
         _uiState.value = transform(_uiState.value)
     }
 
+    private fun clearReceivedPhotos() {
+        _uiState.value.receivedPhotos.forEach(photoReceiver::delete)
+        updateUi {
+            it.copy(
+                receivedPhotos = emptyList(),
+                savedPhotoIds = emptySet(),
+                savingReceivedPhotos = false,
+            )
+        }
+    }
+
     override fun onCleared() {
         closingTransport = true
         closeTransport()
         awareController?.close()
         synchronized(photoLock) { photoResources.close() }
+        clearReceivedPhotos()
         super.onCleared()
     }
 }

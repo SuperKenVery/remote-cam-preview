@@ -1,6 +1,7 @@
 package dev.remotecam.preview.network
 
 import android.net.Network
+import android.util.Log
 import dev.remotecam.preview.media.CodecParameterSets
 import dev.remotecam.preview.media.EncodedAccessUnit
 import dev.remotecam.preview.protocol.AnnexB
@@ -21,6 +22,7 @@ import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
 private val RTP_PROBE = "RCP1".encodeToByteArray()
+private const val TAG = "RemoteCamRtp"
 
 internal fun rtpNalsForAccessUnit(
     accessUnit: EncodedAccessUnit,
@@ -49,10 +51,17 @@ class UdpPreviewSender(
         receiveBufferSize = 64 * 1024
     }
     private val destination = AtomicReference<InetSocketAddress?>(null)
+    private val missingDestinationReported = AtomicBoolean(false)
+    private val sentPackets = AtomicLong(0)
+    private val sentAccessUnits = AtomicLong(0)
     private val running = AtomicBoolean(true)
     private val packetizer = HevcRtpPacketizer(payloadType, ssrc, initialSequence, maxRtpPacketSize)
     private val clock = RtpTimestampClock(initialTimestamp)
     private val probeThread = Thread(::probeLoop, "aware-rtp-probe-listener").apply { start() }
+
+    init {
+        Log.i(TAG, "sender bound local=$localAddress:$localPort expectedPeer=$expectedPeerAddress pt=$payloadType ssrc=$ssrc")
+    }
 
     private fun probeLoop() {
         val buffer = ByteArray(64)
@@ -65,9 +74,14 @@ class UdpPreviewSender(
                     datagram.data.copyOfRange(datagram.offset, datagram.offset + datagram.length).contentEquals(RTP_PROBE)
                 ) {
                     destination.set(InetSocketAddress(datagram.address, datagram.port))
+                    missingDestinationReported.set(false)
+                    Log.i(TAG, "probe accepted from ${datagram.address}:${datagram.port}")
+                } else if (datagram.length == RTP_PROBE.size) {
+                    Log.w(TAG, "probe rejected from ${datagram.address}:${datagram.port}; expected=$expectedPeerAddress")
                 }
-            } catch (_: Throwable) {
+            } catch (error: Throwable) {
                 if (!running.get()) return
+                Log.e(TAG, "probe listener failed", error)
             }
         }
     }
@@ -86,10 +100,21 @@ class UdpPreviewSender(
     }
 
     private fun sendNals(nals: List<ByteArray>, presentationTimeUs: Long) {
-        val target = destination.get() ?: return
-        packetizer.packetize(nals, clock.fromPresentationTimeUs(presentationTimeUs)).forEach { packet ->
+        val target = destination.get() ?: run {
+            if (missingDestinationReported.compareAndSet(false, true)) {
+                Log.w(TAG, "dropping encoded access units until monitor probe arrives")
+            }
+            return
+        }
+        val packets = packetizer.packetize(nals, clock.fromPresentationTimeUs(presentationTimeUs))
+        packets.forEach { packet ->
             val bytes = packet.encode()
             socket.send(DatagramPacket(bytes, bytes.size, target))
+        }
+        val units = sentAccessUnits.incrementAndGet()
+        val totalPackets = sentPackets.addAndGet(packets.size.toLong())
+        if (units == 1L || units % 60L == 0L) {
+            Log.i(TAG, "sent accessUnits=$units packets=$totalPackets lastNals=${nals.size} target=$target")
         }
     }
 
@@ -137,16 +162,21 @@ class UdpPreviewReceiver(
     private val frames = BoundedRtpFrameBuffer(expectedPayloadType)
     private val scheduler = Executors.newSingleThreadScheduledExecutor()
     private val receivedPackets = AtomicLong(0)
+    private val malformedPackets = AtomicLong(0)
+    private val identityMismatches = AtomicLong(0)
     private val highestSequence = AtomicLong(-1)
     private val firstSequence = AtomicLong(-1)
     private val receiverThread = Thread(::receiveLoop, "aware-rtp-receiver").apply { start() }
     private val deadline = reorderDeadlineMs.coerceIn(5, 50)
 
     init {
+        Log.i(TAG, "receiver bound local=$localAddress peer=$peerAddress:$peerPort pt=$expectedPayloadType ssrc=$expectedSsrc")
         sendProbe()
     }
 
     private fun sendProbe() = runCatching { socket.send(DatagramPacket(RTP_PROBE, RTP_PROBE.size)) }
+        .onSuccess { Log.i(TAG, "probe sent from ${socket.localSocketAddress} to ${socket.remoteSocketAddress}") }
+        .onFailure { Log.e(TAG, "probe send failed", it) }
 
     private fun receiveLoop() {
         val buffer = ByteArray(maxRtpPacketSize)
@@ -156,21 +186,40 @@ class UdpPreviewReceiver(
                 socket.receive(datagram)
                 val packet = try {
                     RtpPacket.decode(datagram.data.copyOfRange(datagram.offset, datagram.offset + datagram.length), maxRtpPacketSize)
-                } catch (_: IllegalArgumentException) {
+                } catch (error: IllegalArgumentException) {
+                    val count = malformedPackets.incrementAndGet()
+                    if (count == 1L || count % 100L == 0L) Log.w(TAG, "malformed RTP packets=$count", error)
                     listener.onMalformedPacket()
                     continue
                 }
-                if (packet.payloadType != expectedPayloadType || packet.ssrc != expectedSsrc) continue
-                receivedPackets.incrementAndGet()
+                if (packet.payloadType != expectedPayloadType || packet.ssrc != expectedSsrc) {
+                    val count = identityMismatches.incrementAndGet()
+                    if (count == 1L || count % 100L == 0L) {
+                        Log.w(TAG, "RTP identity mismatch count=$count pt=${packet.payloadType} ssrc=${packet.ssrc}")
+                    }
+                    continue
+                }
+                val count = receivedPackets.incrementAndGet()
+                if (count == 1L || count % 300L == 0L) {
+                    Log.i(TAG, "received RTP packets=$count seq=${packet.sequenceNumber} marker=${packet.marker}")
+                }
                 firstSequence.compareAndSet(-1, packet.sequenceNumber.toLong())
                 highestSequence.accumulateAndGet(packet.sequenceNumber.toLong(), ::maxOf)
                 frames.offer(packet)
                 if (packet.marker) {
-                    scheduler.schedule({ frames.drain(packet.timestamp)?.let(listener::onFrame) }, deadline, TimeUnit.MILLISECONDS)
+                    scheduler.schedule({
+                        frames.drain(packet.timestamp)?.let { frame ->
+                            if (frame.damaged) Log.w(TAG, "damaged RTP access unit timestamp=${frame.timestamp}")
+                            listener.onFrame(frame)
+                        }
+                    }, deadline, TimeUnit.MILLISECONDS)
                 }
             }
         } catch (error: Throwable) {
-            if (running.get()) listener.onReceiverError(error)
+            if (running.get()) {
+                Log.e(TAG, "RTP receiver failed", error)
+                listener.onReceiverError(error)
+            }
         }
     }
 

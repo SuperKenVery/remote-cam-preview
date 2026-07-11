@@ -6,8 +6,12 @@ import android.media.MediaFormat
 import android.os.Bundle
 import android.os.Handler
 import android.os.HandlerThread
+import android.util.Log
 import android.view.Surface
 import androidx.camera.core.SurfaceRequest
+import androidx.camera.core.impl.ConstantObservable
+import androidx.camera.core.impl.Observable
+import androidx.camera.video.MediaSpec
 import androidx.camera.video.VideoOutput
 import dev.remotecam.preview.model.PixelSize
 import dev.remotecam.preview.model.StreamProfile
@@ -17,6 +21,9 @@ import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
+
+private const val TAG = "RemoteCamHevc"
 
 data class EncodedAccessUnit(
     val data: ByteArray,
@@ -48,6 +55,7 @@ class HevcEncoder(
     private var inputSurface: Surface? = null
     private var surfaceRequest: SurfaceRequest? = null
     private val closed = AtomicBoolean(false)
+    private val outputCount = AtomicLong(0)
 
     @Synchronized
     fun fulfill(request: SurfaceRequest) {
@@ -60,6 +68,7 @@ class HevcEncoder(
             stopCodec()
         }
         val actualSize = PixelSize(request.resolution.width, request.resolution.height)
+        Log.i(TAG, "fulfilling CameraX encoder surface ${actualSize.width}x${actualSize.height}")
         val mediaCodec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_HEVC)
         mediaCodec.setCallback(object : MediaCodec.Callback() {
             override fun onInputBufferAvailable(codec: MediaCodec, index: Int) = Unit
@@ -71,6 +80,10 @@ class HevcEncoder(
                     }
                     val data = codec.getOutputBuffer(index)?.copyRange(info.offset, info.size) ?: byteArrayOf()
                     if (data.isNotEmpty()) {
+                        val count = outputCount.incrementAndGet()
+                        if (count == 1L || count % 60L == 0L || info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0) {
+                            Log.i(TAG, "encoder output count=$count bytes=${data.size} flags=${info.flags} pts=${info.presentationTimeUs}")
+                        }
                         listener.onAccessUnit(
                             EncodedAccessUnit(
                                 data = data,
@@ -91,10 +104,12 @@ class HevcEncoder(
                 val csd = (0..2).mapNotNull { index ->
                     format.getByteBuffer("csd-$index")?.let { buffer -> buffer.copyRange(buffer.position(), buffer.remaining()) }
                 }
+                Log.i(TAG, "encoder format changed format=$format csdSizes=${csd.map(ByteArray::size)}")
                 if (csd.isNotEmpty()) listener.onParameterSets(CodecParameterSets(csd))
             }
 
             override fun onError(codec: MediaCodec, exception: MediaCodec.CodecException) {
+                Log.e(TAG, "encoder callback error", exception)
                 listener.onEncoderError(exception)
             }
         }, callbackHandler)
@@ -127,6 +142,7 @@ class HevcEncoder(
             }
             listener.onEncoderReady(actualSize)
         } catch (error: Throwable) {
+            Log.e(TAG, "encoder configure failed", error)
             runCatching { mediaCodec.release() }
             codec = null
             inputSurface = null
@@ -164,7 +180,12 @@ class HevcVideoOutput(
     private val encoder: HevcEncoder,
     val preferredSize: PixelSize,
 ) : VideoOutput, AutoCloseable {
+    private val mediaSpec = ConstantObservable.withValue(MediaSpec.builder().build())
+    private val sourceStreamRequired = ConstantObservable.withValue(true)
+
     override fun onSurfaceRequested(request: SurfaceRequest) = encoder.fulfill(request)
+    override fun getMediaSpec(): Observable<MediaSpec> = mediaSpec
+    override fun isSourceStreamRequired(): Observable<Boolean> = sourceStreamRequired
     fun requestKeyFrame() = encoder.requestKeyFrame()
     override fun close() = encoder.close()
 }
