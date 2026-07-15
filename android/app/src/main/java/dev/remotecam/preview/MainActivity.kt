@@ -124,7 +124,9 @@ private fun RemoteCamApp(viewModel: RemoteCamViewModel) {
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         viewModel.onPermissionsResult()
     }
-    if (state.sessionState == SessionState.CONNECTED && state.role != null) {
+    val showMediaScreen = state.sessionState == SessionState.CONNECTED ||
+        (state.forceCameraScreen && state.role == DeviceRole.CAMERA)
+    if (showMediaScreen && state.role != null) {
         BackHandler(onBack = viewModel::endSession)
         when (state.role) {
             DeviceRole.CAMERA -> CameraScreen(
@@ -132,6 +134,9 @@ private fun RemoteCamApp(viewModel: RemoteCamViewModel) {
                 photoStatus = state.lastPhotoStatus,
                 videoOutput = state.cameraVideoOutput,
                 status = state.status,
+                connected = state.sessionState == SessionState.CONNECTED,
+                selectedPose = state.selectedPoseGuideId.takeIf { it in 1..5 }?.minus(1),
+                onPoseClick = viewModel::togglePoseGuide,
                 onClose = viewModel::endSession,
             )
             DeviceRole.MONITOR -> MonitorScreen(
@@ -143,6 +148,7 @@ private fun RemoteCamApp(viewModel: RemoteCamViewModel) {
                 receivedPhotos = state.receivedPhotos,
                 savedPhotoIds = state.savedPhotoIds,
                 savingPhotos = state.savingReceivedPhotos,
+                selectedPose = state.selectedPoseGuideId.takeIf { it in 1..5 }?.minus(1),
                 setReceivePhotos = viewModel::setReceivePhotos,
                 updateViewport = viewModel::updateMonitorViewport,
                 setSurface = viewModel::setMonitorSurface,
@@ -192,6 +198,12 @@ private fun RemoteCamApp(viewModel: RemoteCamViewModel) {
                         enabled = state.capabilities.awareHardware && state.capabilities.awareAvailable,
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text("开始查找设备") }
+                }
+                if (state.role == DeviceRole.CAMERA && missing.isEmpty()) {
+                    OutlinedButton(
+                        onClick = viewModel::forceOpenCameraScreen,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("调试：不配对，直接进入拍摄界面") }
                 }
             }
 
@@ -301,12 +313,14 @@ private fun CameraScreen(
     photoStatus: String?,
     videoOutput: dev.remotecam.preview.media.HevcVideoOutput?,
     status: String,
+    connected: Boolean,
+    selectedPose: Int?,
+    onPoseClick: (Int) -> Unit,
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     var ready by remember { mutableStateOf(false) }
-    var selectedPose by remember { mutableStateOf<Int?>(null) }
     val controller = remember {
         CameraController(context, lifecycleOwner, object : CameraControllerListener {
             override fun onCameraReady() { ready = true }
@@ -335,7 +349,7 @@ private fun CameraScreen(
                         Text("×", color = Color.White, fontSize = 32.sp, fontWeight = FontWeight.Light)
                     }
                     Text(
-                        "拍摄端 · 已连接",
+                        if (connected) "拍摄端 · 已连接" else "拍摄端 · 本地预览",
                         color = Color.White,
                         style = MaterialTheme.typography.labelLarge,
                         modifier = Modifier.background(Color.Black.copy(alpha = .35f), RoundedCornerShape(20.dp)).padding(horizontal = 12.dp, vertical = 7.dp),
@@ -354,7 +368,7 @@ private fun CameraScreen(
                 ready = ready,
                 status = status,
                 selectedPose = selectedPose,
-                onPoseClick = { index -> selectedPose = if (selectedPose == index) null else index },
+                onPoseClick = onPoseClick,
                 onShutter = controller::takePhoto,
             )
         }
@@ -475,6 +489,7 @@ private fun MonitorScreen(
     receivedPhotos: List<ReceivedPhoto>,
     savedPhotoIds: Set<String>,
     savingPhotos: Boolean,
+    selectedPose: Int?,
     setReceivePhotos: (Boolean) -> Unit,
     updateViewport: (Int, Int) -> Unit,
     setSurface: (android.view.Surface?) -> Unit,
@@ -532,6 +547,9 @@ private fun MonitorScreen(
                     },
                     modifier = Modifier.fillMaxSize(),
                 )
+                selectedPose?.let { index ->
+                    PoseGuideOverlay(poseRecommendations[index])
+                }
                 if (receivedFrames == 0L) {
                     Text("等待 HEVC/RTP 预览", color = Color.White.copy(alpha = 0.7f))
                 }

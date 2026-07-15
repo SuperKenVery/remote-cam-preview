@@ -107,6 +107,8 @@ data class RemoteCamUiState(
     val receivedPhotos: List<ReceivedPhoto> = emptyList(),
     val savedPhotoIds: Set<String> = emptySet(),
     val savingReceivedPhotos: Boolean = false,
+    val forceCameraScreen: Boolean = false,
+    val selectedPoseGuideId: Int = 0,
 )
 
 class RemoteCamViewModel(application: Application) : AndroidViewModel(application), WifiAwareListener {
@@ -218,6 +220,30 @@ class RemoteCamViewModel(application: Application) : AndroidViewModel(applicatio
         if (normalized.length in 8..63 && machine.state == SessionState.CONNECTING) requestSecureDataPathIfReady()
     }
 
+    fun forceOpenCameraScreen() {
+        val state = _uiState.value
+        if (state.role != DeviceRole.CAMERA) return
+        val missingRelevant = state.capabilities.missingPermissions.intersect(requiredPermissions().toSet())
+        if (missingRelevant.isNotEmpty()) {
+            updateUi { it.copy(status = "请先授予相机权限，再进入本地拍摄预览") }
+            return
+        }
+        updateUi {
+            it.copy(
+                forceCameraScreen = true,
+                status = "调试模式：未配对，仅运行本地拍摄预览与编码",
+            )
+        }
+    }
+
+    fun togglePoseGuide(index: Int) {
+        if (index !in 0..4 || _uiState.value.role != DeviceRole.CAMERA) return
+        val tappedGuideId = index + 1
+        val guideId = if (_uiState.value.selectedPoseGuideId == tappedGuideId) 0 else tappedGuideId
+        updateUi { it.copy(selectedPoseGuideId = guideId) }
+        serverControl?.send(poseGuideMessage(guideId))
+    }
+
     fun updateMonitorViewport(width: Int, height: Int) {
         if (width > 0 && height > 0) updateUi { it.copy(monitorViewport = PixelSize(width, height)) }
     }
@@ -300,6 +326,8 @@ class RemoteCamViewModel(application: Application) : AndroidViewModel(applicatio
                 sessionPassphrase = "12345678",
                 status = "旧会话资源已撤销，请重新选择角色",
                 dataPath = null,
+                forceCameraScreen = false,
+                selectedPoseGuideId = 0,
             )
         }
     }
@@ -635,10 +663,12 @@ class RemoteCamViewModel(application: Application) : AndroidViewModel(applicatio
                     val cached = replayCache.get(message.requestId)
                     if (cached != null) {
                         connection.send(cached)
+                        if (cached.type == ControlTypes.SESSION_ACCEPTED) connection.sendPoseGuideSelection()
                     } else {
                         val accepted = acceptMonitor(message, dataPath)
                         replayCache.put(message.requestId, accepted)
                         connection.send(accepted)
+                        if (accepted.type == ControlTypes.SESSION_ACCEPTED) connection.sendPoseGuideSelection()
                     }
                 }
             }
@@ -827,6 +857,10 @@ class RemoteCamViewModel(application: Application) : AndroidViewModel(applicatio
     private fun handleMonitorControl(message: ControlEnvelope, dataPath: AwareDataPath) {
         when (message.type) {
             ControlTypes.SESSION_ACCEPTED -> configureMonitorPreview(message, dataPath)
+            ControlTypes.PREVIEW_POSE_GUIDE -> {
+                val guideId = message.payload["guideId"]!!.jsonPrimitive.int
+                updateUi { it.copy(selectedPoseGuideId = guideId) }
+            }
             ControlTypes.PHOTO_AVAILABLE -> receiveAvailablePhoto(message)
             ControlTypes.HEARTBEAT_PING -> sessionClient?.send(
                 ControlEnvelope(ControlTypes.HEARTBEAT_PONG, message.requestId, payload = message.payload),
@@ -1026,6 +1060,16 @@ class RemoteCamViewModel(application: Application) : AndroidViewModel(applicatio
         },
     )
 
+    private fun poseGuideMessage(guideId: Int) = ControlEnvelope(
+        ControlTypes.PREVIEW_POSE_GUIDE,
+        nextRequestId("pose-guide"),
+        payload = buildJsonObject { put("guideId", guideId.coerceIn(0, 5)) },
+    )
+
+    private fun ControlServerConnection.sendPoseGuideSelection() {
+        send(poseGuideMessage(_uiState.value.selectedPoseGuideId))
+    }
+
     private fun profileJson(profile: StreamProfile, configId: String) = buildJsonObject {
         put("configId", configId)
         put("widthPx", profile.size.width)
@@ -1098,7 +1142,12 @@ class RemoteCamViewModel(application: Application) : AndroidViewModel(applicatio
         cameraSessionId = null
         monitorSessionId = null
         activeConfigId = null
-        updateUi { it.copy(dataPath = null) }
+        updateUi {
+            it.copy(
+                dataPath = null,
+                selectedPoseGuideId = if (it.role == DeviceRole.MONITOR) 0 else it.selectedPoseGuideId,
+            )
+        }
         closingTransport = previouslyClosing
     }
 

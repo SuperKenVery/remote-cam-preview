@@ -60,6 +60,7 @@ object ControlMessageCodec {
         "preview.stop",
         "preview.reconfigure",
         "preview.tierRequest",
+        "preview.poseGuide",
         "photo.receivePreference",
         "photo.captured",
         "photo.available",
@@ -196,6 +197,7 @@ object ControlMessageCodec {
                 payload.optionalInt("maxWidthPx", 16..16_384)
                 payload.optionalInt("maxHeightPx", 16..16_384)
             }
+            "preview.poseGuide" -> payload.int("guideId", 0..5)
             "photo.receivePreference" -> payload.bool("enabled")
             "photo.captured" -> {
                 payload.id("captureId")
@@ -495,6 +497,7 @@ object ControlTypes {
     const val PREVIEW_STOP = "preview.stop"
     const val PREVIEW_RECONFIGURE = "preview.reconfigure"
     const val PREVIEW_TIER_REQUEST = "preview.tierRequest"
+    const val PREVIEW_POSE_GUIDE = "preview.poseGuide"
     const val PHOTO_RECEIVE_PREFERENCE = "photo.receivePreference"
     const val PHOTO_CAPTURED = "photo.captured"
     const val PHOTO_AVAILABLE = "photo.available"
