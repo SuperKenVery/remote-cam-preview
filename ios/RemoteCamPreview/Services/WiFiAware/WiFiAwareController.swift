@@ -1,9 +1,15 @@
 import Foundation
 import Network
 import Observation
+import OSLog
 import UIKit
 import VideoToolbox
 import WiFiAware
+
+private let wifiAwareLogger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "RemoteCamPreview",
+    category: "WiFiAware"
+)
 
 @MainActor
 @Observable
@@ -29,12 +35,10 @@ final class WiFiAwareController {
     }
 
     static let serviceName = "_remote-cam._tcp"
-    static let photoServiceName = "_remote-photo._tcp"
-    static let rtpServiceName = "_remote-preview._udp"
-    static let rtcpServiceName = "_remote-feedback._udp"
 
     private(set) var pairedDevices: [WAPairedDevice] = []
     private(set) var discoveredEndpoints: [WAEndpoint] = []
+    var capturePreviewDimensionsProvider: (() -> PixelDimensions?)?
 
     private let controlChannel = ControlChannel()
     private let previewTransport = PreviewTransport()
@@ -48,7 +52,6 @@ final class WiFiAwareController {
     private var httpTask: Task<Void, Never>?
     private var photoHTTPPort: UInt16?
     private var photoRemoteEndpoint: NWEndpoint?
-    private var photoServiceEndpoint: WAEndpoint?
     private var sessionId: String?
     private var accessToken: String?
     private var negotiatedConfigId: String?
@@ -61,19 +64,16 @@ final class WiFiAwareController {
 
     func checkAvailability() -> WiFiAwareAvailability {
         guard WACapabilities.supportedFeatures.contains(.wifiAware) else {
+            wifiAwareLogger.error("Wi-Fi Aware capability check failed: feature unsupported")
             return .unsupported
         }
         guard publishableService != nil,
-              subscribableService != nil,
-              photoPublishableService != nil,
-              photoSubscribableService != nil,
-              rtpPublishableService != nil,
-              rtpSubscribableService != nil,
-              rtcpPublishableService != nil,
-              rtcpSubscribableService != nil
+              subscribableService != nil
         else {
+            wifiAwareLogger.error("Wi-Fi Aware capability check failed: one or more services are undeclared")
             return .serviceDeclarationMissing
         }
+        wifiAwareLogger.notice("Wi-Fi Aware capability and service declaration checks passed")
         observePairedDevices()
         return .available
     }
@@ -84,7 +84,11 @@ final class WiFiAwareController {
         receivePhotos: Bool,
         eventHandler: @escaping @MainActor (Event) -> Void
     ) {
+        wifiAwareLogger.notice(
+            "Starting control publisher role=\(String(describing: localRole), privacy: .public) peer=\(peer.name ?? "unnamed-peer", privacy: .private(mask: .hash)) receivePhotos=\(receivePhotos)"
+        )
         guard let service = publishableService else {
+            wifiAwareLogger.error("Cannot start control publisher: service declaration missing")
             eventHandler(.failed(
                 availability: .serviceDeclarationMissing,
                 reason: "Wi-Fi Aware 服务没有在 Info.plist 中声明。"
@@ -110,6 +114,11 @@ final class WiFiAwareController {
                 }
                 .maximumMessageSize(ControlMessage.maximumEncodedSize)
                 .autoReplyPing(true)
+                // WAEndpoint is opaque rather than URL-backed. Network.framework cannot
+                // synthesize an HTTP WebSocket opening request for it (nw_ws_create_state
+                // reports "unable to create url endpoint"), so coordinated iOS peers begin
+                // WebSocket framing directly once the Aware-bound TCP connection is ready.
+                .skipHandshake(true)
             }
             .wifiAware { $0.performanceMode = .realtime }
             .serviceClass(.interactiveVideo)
@@ -117,11 +126,14 @@ final class WiFiAwareController {
             let listener = try NetworkListener<WebSocket>(for: provider, using: parameters)
                 .newConnectionLimit(1)
                 .onStateUpdate { _, state in
+                    Self.logListenerState(state)
                     switch state {
-                    case .waiting(let error):
-                        eventHandler(Self.event(for: error, waiting: true))
+                    case .waiting:
+                        // Aware listeners commonly report ENETDOWN while the selected data path
+                        // is being activated, then transition directly to ready. Keep searching.
+                        break
                     case .failed(let error):
-                        eventHandler(Self.event(for: error, waiting: false))
+                        eventHandler(Self.event(for: error))
                     case .cancelled:
                         break
                     case .setup, .ready:
@@ -134,8 +146,12 @@ final class WiFiAwareController {
 
             listenerTask = Task { [weak self] in
                 do {
+                    wifiAwareLogger.notice("Running Wi-Fi Aware control listener")
                     try await listener.run { connection in
                         guard let self else { return }
+                        wifiAwareLogger.notice(
+                            "Control listener accepted WebSocket remote=\(Self.destinationDescription(connection.remoteEndpoint), privacy: .private(mask: .hash))"
+                        )
                         self.connection = connection
                         self.photoRemoteEndpoint = connection.remoteEndpoint
                         await self.controlChannel.attach(connection)
@@ -143,6 +159,7 @@ final class WiFiAwareController {
                         if localRole == .monitor {
                             let id = Self.makeSessionId()
                             self.sessionId = id
+                            wifiAwareLogger.notice("Publisher-side monitor sending initial session.hello")
                             try await self.controlChannel.send(.sessionHello(
                                 sessionId: id,
                                 display: Self.displayCapabilities,
@@ -155,8 +172,11 @@ final class WiFiAwareController {
                         )
                     }
                 } catch is CancellationError {
-                    // The session intentionally ended.
+                    wifiAwareLogger.notice("Control listener task cancelled")
                 } catch {
+                    wifiAwareLogger.error(
+                        "Control listener session failed: \(Self.errorDescription(error), privacy: .public)"
+                    )
                     await self?.controlChannel.detach()
                     self?.invalidateSessionResources()
                     eventHandler(.diagnostic(Self.diagnostic(
@@ -169,6 +189,9 @@ final class WiFiAwareController {
                 }
             }
         } catch {
+            wifiAwareLogger.fault(
+                "Failed to create Wi-Fi Aware control listener: \(Self.errorDescription(error), privacy: .public)"
+            )
             eventHandler(.diagnostic(Self.diagnostic(
                 error,
                 title: "无法启动控制服务",
@@ -183,7 +206,9 @@ final class WiFiAwareController {
         onEndpointsChanged: @escaping @MainActor ([WAEndpoint]) -> Void,
         eventHandler: @escaping @MainActor (Event) -> Void
     ) {
+        wifiAwareLogger.notice("Starting Wi-Fi Aware control service browser")
         guard let service = subscribableService else {
+            wifiAwareLogger.error("Cannot start control browser: service declaration missing")
             eventHandler(.failed(
                 availability: .serviceDeclarationMissing,
                 reason: "Wi-Fi Aware 订阅服务没有声明。"
@@ -204,12 +229,16 @@ final class WiFiAwareController {
         browserTask = Task { [weak self] in
             do {
                 try await browser.run { endpoints in
+                    wifiAwareLogger.notice("Control browser endpoints changed count=\(endpoints.count)")
                     self?.discoveredEndpoints = endpoints
                     onEndpointsChanged(endpoints)
                 }
             } catch is CancellationError {
-                // The session intentionally ended.
+                wifiAwareLogger.notice("Control browser task cancelled")
             } catch {
+                wifiAwareLogger.error(
+                    "Control browser failed: \(Self.errorDescription(error), privacy: .public)"
+                )
                 await self?.controlChannel.detach()
                 self?.invalidateSessionResources()
                 eventHandler(.diagnostic(Self.diagnostic(
@@ -229,6 +258,9 @@ final class WiFiAwareController {
         receivePhotos: Bool,
         eventHandler: @escaping @MainActor (Event) -> Void
     ) {
+        wifiAwareLogger.notice(
+            "Connecting control WebSocket role=\(String(describing: localRole), privacy: .public) peer=\(endpoint.device.name ?? "unnamed-peer", privacy: .private(mask: .hash)) receivePhotos=\(receivePhotos)"
+        )
         stopNetworkTasks()
         configurePreviewCallbacks(eventHandler: eventHandler)
         eventHandler(.connecting)
@@ -239,19 +271,23 @@ final class WiFiAwareController {
             }
             .maximumMessageSize(ControlMessage.maximumEncodedSize)
             .autoReplyPing(true)
+            .skipHandshake(true)
         }
         .wifiAware { $0.performanceMode = .realtime }
         .serviceClass(.interactiveVideo)
 
         let connection = NetworkConnection<WebSocket>(to: endpoint, using: parameters)
             .onStateUpdate { _, state in
+                Self.logConnectionState(state)
                 switch state {
                 case .ready:
                     eventHandler(.connected(peerName: endpoint.device.name))
-                case .waiting(let error):
-                    eventHandler(Self.event(for: error, waiting: true))
+                case .waiting:
+                    // Transient waiting is part of Wi-Fi Aware data-path establishment. The
+                    // initial send timeout reports a real failure if it does not recover.
+                    break
                 case .failed(let error):
-                    eventHandler(Self.event(for: error, waiting: false))
+                    eventHandler(Self.event(for: error))
                 case .cancelled:
                     eventHandler(.interrupted(reason: "连接已结束"))
                 case .setup, .preparing:
@@ -270,6 +306,7 @@ final class WiFiAwareController {
                 if localRole == .monitor {
                     let id = Self.makeSessionId()
                     self.sessionId = id
+                    wifiAwareLogger.notice("Monitor sending initial session.hello")
                     try await controlChannel.send(.sessionHello(
                         sessionId: id,
                         display: Self.displayCapabilities,
@@ -281,8 +318,11 @@ final class WiFiAwareController {
                     eventHandler: eventHandler
                 )
             } catch is CancellationError {
-                // The session intentionally ended.
+                wifiAwareLogger.notice("Outgoing control session task cancelled")
             } catch {
+                wifiAwareLogger.error(
+                    "Outgoing control session failed: \(Self.errorDescription(error), privacy: .public)"
+                )
                 await controlChannel.detach()
                 invalidateSessionResources()
                 eventHandler(.diagnostic(Self.diagnostic(
@@ -310,17 +350,13 @@ final class WiFiAwareController {
 
     func downloadPhoto(_ metadata: PhotoMetadata) async throws -> URL {
         guard let accessToken else { throw WiFiAwarePhotoError.sessionTokenUnavailable }
-        let awareEndpoint: WAEndpoint
-        if #available(iOS 26.4, *),
-           let port = photoHTTPPort,
-           let remoteEndpoint = connection?.remoteEndpoint ?? photoRemoteEndpoint,
-           let endpoint = remoteEndpoint.wifiAware(port: NWEndpoint.Port(rawValue: port)!) {
-            awareEndpoint = endpoint
-        } else if let photoServiceEndpoint {
-            awareEndpoint = photoServiceEndpoint
-        } else {
-            throw WiFiAwarePhotoError.peerUnavailable
-        }
+        guard let port = photoHTTPPort,
+           let remoteEndpoint = connection?.currentPath?.remoteEndpoint
+               ?? connection?.remoteEndpoint
+               ?? photoRemoteEndpoint,
+           let endpointPort = NWEndpoint.Port(rawValue: port),
+           let awareEndpoint = remoteEndpoint.wifiAware(port: endpointPort)
+        else { throw WiFiAwarePhotoError.peerUnavailable }
 
         let parameters = NWParametersBuilder.parameters {
             TCP().noDelay(true)
@@ -336,6 +372,7 @@ final class WiFiAwareController {
     }
 
     func stop() {
+        wifiAwareLogger.notice("Stopping Wi-Fi Aware session and invalidating ephemeral resources")
         stopNetworkTasks()
         connection = nil
         listener = nil
@@ -344,7 +381,6 @@ final class WiFiAwareController {
         httpTask = nil
         photoHTTPPort = nil
         photoRemoteEndpoint = nil
-        photoServiceEndpoint = nil
         sessionId = nil
         accessToken = nil
         negotiatedConfigId = nil
@@ -363,30 +399,6 @@ final class WiFiAwareController {
         WASubscribableService.allServices[Self.serviceName]
     }
 
-    private var photoPublishableService: WAPublishableService? {
-        WAPublishableService.allServices[Self.photoServiceName]
-    }
-
-    private var photoSubscribableService: WASubscribableService? {
-        WASubscribableService.allServices[Self.photoServiceName]
-    }
-
-    private var rtpPublishableService: WAPublishableService? {
-        WAPublishableService.allServices[Self.rtpServiceName]
-    }
-
-    private var rtpSubscribableService: WASubscribableService? {
-        WASubscribableService.allServices[Self.rtpServiceName]
-    }
-
-    private var rtcpPublishableService: WAPublishableService? {
-        WAPublishableService.allServices[Self.rtcpServiceName]
-    }
-
-    private var rtcpSubscribableService: WASubscribableService? {
-        WASubscribableService.allServices[Self.rtcpServiceName]
-    }
-
     private func stopNetworkTasks() {
         listenerTask?.cancel()
         browserTask?.cancel()
@@ -398,7 +410,6 @@ final class WiFiAwareController {
         httpTask = nil
         httpListener = nil
         photoHTTPPort = nil
-        photoServiceEndpoint = nil
         previewTransport.stop()
     }
 
@@ -456,7 +467,6 @@ final class WiFiAwareController {
         httpTask = nil
         httpListener = nil
         photoHTTPPort = nil
-        photoServiceEndpoint = nil
         sessionId = nil
         accessToken = nil
         negotiatedConfigId = nil
@@ -472,7 +482,7 @@ final class WiFiAwareController {
         return awarePath.endpoint.device
     }
 
-    private static func event(for error: NWError, waiting: Bool) -> Event {
+    private static func event(for error: NWError) -> Event {
         if let wifiAwareError = error.wifiAware {
             switch wifiAwareError {
             case .wifiAwareUnsupported:
@@ -489,16 +499,60 @@ final class WiFiAwareController {
                 break
             }
         }
-        return waiting
-            ? .interrupted(reason: "网络暂时不可用：\(error.localizedDescription)")
-            : .interrupted(reason: error.localizedDescription)
+        return .interrupted(reason: error.localizedDescription)
+    }
+
+    private static func logListenerState(_ state: NetworkListener<WebSocket>.State) {
+        switch state {
+        case .setup:
+            wifiAwareLogger.notice("Control listener state=setup")
+        case .ready:
+            wifiAwareLogger.notice("Control listener state=ready")
+        case .waiting(let error):
+            wifiAwareLogger.error(
+                "Control listener state=waiting error=\(errorDescription(error), privacy: .public)"
+            )
+        case .failed(let error):
+            wifiAwareLogger.error(
+                "Control listener state=failed error=\(errorDescription(error), privacy: .public)"
+            )
+        case .cancelled:
+            wifiAwareLogger.notice("Control listener state=cancelled")
+        @unknown default:
+            wifiAwareLogger.error("Control listener entered an unknown state")
+        }
+    }
+
+    private static func logConnectionState(_ state: NetworkConnection<WebSocket>.State) {
+        switch state {
+        case .setup:
+            wifiAwareLogger.notice("Outgoing control connection state=setup")
+        case .preparing:
+            wifiAwareLogger.notice("Outgoing control connection state=preparing")
+        case .ready:
+            wifiAwareLogger.notice("Outgoing control connection state=ready")
+        case .waiting(let error):
+            wifiAwareLogger.error(
+                "Outgoing control connection state=waiting error=\(errorDescription(error), privacy: .public)"
+            )
+        case .failed(let error):
+            wifiAwareLogger.error(
+                "Outgoing control connection state=failed error=\(errorDescription(error), privacy: .public)"
+            )
+        case .cancelled:
+            wifiAwareLogger.notice("Outgoing control connection state=cancelled")
+        @unknown default:
+            wifiAwareLogger.error("Outgoing control connection entered an unknown state")
+        }
+    }
+
+    private static func errorDescription(_ error: Error) -> String {
+        let nsError = error as NSError
+        return "\(nsError.domain)[\(nsError.code)]: \(nsError.localizedDescription)"
     }
 
     private static func peerName(from endpoint: NWEndpoint?) -> String? {
-        if #available(iOS 26.4, *) {
-            return endpoint?.wifiAware?.device.name
-        }
-        return nil
+        endpoint?.wifiAware?.device.name
     }
 
     private func handleIncoming(
@@ -527,16 +581,15 @@ final class WiFiAwareController {
                     let maximumPacketSize = 1_200
                     let previewEndpoint = try await previewTransport.prepareCamera(
                         peer: peer,
-                        rtpPublishableService: rtpPublishableService,
-                        rtcpPublishableService: rtcpPublishableService,
-                        rtpServiceName: Self.rtpServiceName,
-                        rtcpServiceName: Self.rtcpServiceName,
                         mediaSSRC: mediaSSRC,
                         payloadType: payloadType,
                         maximumPacketSize: maximumPacketSize
                     )
                     let photoEndpoint = try await startPhotoServerForCurrentPeer()
-                    let preview = Self.previewConfiguration(from: message)
+                    let preview = Self.previewConfiguration(
+                        from: message,
+                        captureDimensions: capturePreviewDimensionsProvider?()
+                    )
                     let configId = Self.makeConfigId()
                     negotiatedConfigId = configId
                     eventHandler(.previewNegotiated(
@@ -557,15 +610,19 @@ final class WiFiAwareController {
                         payloadType: payloadType,
                         rtpSSRC: mediaSSRC,
                         maximumPacketSize: maximumPacketSize,
-                        rtpService: previewEndpoint.rtpService,
-                        rtcpService: previewEndpoint.rtcpService,
                         photoEndpoint: photoEndpoint
+                    )
+                    wifiAwareLogger.notice(
+                        "Prepared session.accepted preview=\(preview.dimensions.width)x\(preview.dimensions.height) destinationLength=\(Self.destinationDescription(self.connection?.localEndpoint).utf8.count) rtpPort=\(previewEndpoint.rtpPort) rtcpPort=\(previewEndpoint.rtcpPort) photoPort=\(photoEndpoint.port)"
                     )
                     cachedSessionHello = message
                     cachedSessionAccepted = accepted
                     try await controlChannel.send(accepted)
                 }
             } catch {
+                wifiAwareLogger.error(
+                    "Capture session.hello handling failed: \(Self.errorDescription(error), privacy: .public)"
+                )
                 invalidateSessionResources()
                 eventHandler(.diagnostic(Self.diagnostic(
                     error,
@@ -588,9 +645,6 @@ final class WiFiAwareController {
                     if case .integer(let port)? = endpoint["port"],
                        let value = UInt16(exactly: port) {
                         photoHTTPPort = value
-                    } else if case .string(let service)? = endpoint["serviceName"],
-                              service == Self.photoServiceName {
-                        photoServiceEndpoint = try await discoverPhotoService()
                     } else {
                         throw ControlProtocolError.malformedMessage
                     }
@@ -602,7 +656,6 @@ final class WiFiAwareController {
                 let preview = negotiatedPreview.configuration
                 negotiatedConfigId = negotiatedPreview.configId
                 let network = try Self.previewNetworkConfiguration(from: message)
-                let peer = try await currentPeer()
                 eventHandler(.previewNegotiated(
                     configuration: preview,
                     mediaSSRC: network.mediaSSRC,
@@ -610,11 +663,10 @@ final class WiFiAwareController {
                     maximumPacketSize: network.maximumRTPPacketSize
                 ))
                 try await previewTransport.connectMonitor(
-                    peer: peer,
-                    controlRemoteEndpoint: connection?.remoteEndpoint ?? photoRemoteEndpoint,
-                    configuration: network,
-                    rtpSubscribableService: rtpSubscribableService,
-                    rtcpSubscribableService: rtcpSubscribableService
+                    controlRemoteEndpoint: connection?.currentPath?.remoteEndpoint
+                        ?? connection?.remoteEndpoint
+                        ?? photoRemoteEndpoint,
+                    configuration: network
                 )
                 try await controlChannel.send(.previewStart(configId: negotiatedPreview.configId))
             } catch {
@@ -653,7 +705,7 @@ final class WiFiAwareController {
 
     private func startPhotoServerForCurrentPeer() async throws -> PhotoEndpointAdvertisement {
         if let photoHTTPPort {
-            return PhotoEndpointAdvertisement(port: photoHTTPPort, service: nil)
+            return PhotoEndpointAdvertisement(port: photoHTTPPort)
         }
         guard let connection,
               let path = connection.currentPath,
@@ -661,43 +713,36 @@ final class WiFiAwareController {
         else { throw WiFiAwarePhotoError.peerUnavailable }
         guard let accessToken else { throw WiFiAwarePhotoError.sessionTokenUnavailable }
 
-        let provider: WAPublisherListener
-        let advertisedService: String?
-        if #available(iOS 26.4, *) {
-            provider = .wifiAware(
-                .addingConnections(from: .selected([awarePath.endpoint.device]))
-            )
-            advertisedService = nil
-        } else {
-            guard let service = photoPublishableService else {
-                throw WiFiAwarePhotoError.photoServiceMissing
-            }
-            provider = .wifiAware(
-                .connecting(
-                    to: service,
-                    from: .selected([awarePath.endpoint.device]),
-                    datapath: .realtime
-                )
-            )
-            advertisedService = Self.photoServiceName
-        }
+        let provider: WAPublisherListener = .wifiAware(
+            .addingConnections(from: .selected([awarePath.endpoint.device]))
+        )
         let parameters = NWParametersBuilder.parameters {
             TCP().noDelay(true)
         }
         .wifiAware { $0.performanceMode = .realtime }
         .serviceClass(.background)
+        // Keep the listener available for every photo in this session. NetworkListener's
+        // newConnectionLimit is a lifetime acceptance count, not a concurrency limit; setting
+        // it to 1 makes the first download succeed and every later download wait forever.
         let listener = try NetworkListener<TCP>(for: provider, using: parameters)
-            .newConnectionLimit(1)
         httpListener = listener
         httpTask = Task { [weak self] in
             do {
                 try await listener.run { photoConnection in
                     guard let self else { return }
-                    try await PhotoHTTPConnection.serve(
-                        over: photoConnection,
-                        store: self.photoResources,
-                        bearerToken: accessToken
-                    )
+                    wifiAwareLogger.notice("Accepted photo HTTP connection")
+                    do {
+                        try await PhotoHTTPConnection.serve(
+                            over: photoConnection,
+                            store: self.photoResources,
+                            bearerToken: accessToken
+                        )
+                        wifiAwareLogger.notice("Completed photo HTTP connection")
+                    } catch {
+                        wifiAwareLogger.error(
+                            "Photo HTTP connection failed without stopping listener: \(Self.errorDescription(error), privacy: .public)"
+                        )
+                    }
                 }
             } catch is CancellationError {
                 // The session intentionally ended.
@@ -707,47 +752,13 @@ final class WiFiAwareController {
         }
 
         for _ in 0 ..< 250 {
-            if let port = listener.port?.rawValue {
+            if let port = listener.port?.rawValue, port != 0 {
                 photoHTTPPort = port
-                return PhotoEndpointAdvertisement(
-                    port: advertisedService == nil ? port : nil,
-                    service: advertisedService
-                )
+                return PhotoEndpointAdvertisement(port: port)
             }
             try await Task.sleep(for: .milliseconds(20))
         }
         throw WiFiAwarePhotoError.listenerTimedOut
-    }
-
-    private func discoverPhotoService() async throws -> WAEndpoint {
-        guard let connection,
-              let path = connection.currentPath,
-              let awarePath = try await path.wifiAware,
-              let service = photoSubscribableService
-        else { throw WiFiAwarePhotoError.peerUnavailable }
-
-        let provider: WASubscriberBrowser = .wifiAware(
-            .connecting(to: .selected([awarePath.endpoint.device]), from: service)
-        )
-        let parameters = NWParameters.tcp
-            .wifiAware { $0.performanceMode = .realtime }
-        let browser = NetworkBrowser(for: provider, using: parameters)
-
-        return try await withThrowingTaskGroup(of: WAEndpoint.self) { group in
-            group.addTask {
-                try await browser.run { endpoints in
-                    guard let endpoint = endpoints.first else { return .continue }
-                    return .finish(endpoint)
-                }
-            }
-            group.addTask {
-                try await Task.sleep(for: .seconds(8))
-                throw WiFiAwarePhotoError.listenerTimedOut
-            }
-            let endpoint = try await group.next()!
-            group.cancelAll()
-            return endpoint
-        }
     }
 
     private static var displayCapabilities: MonitorDisplayCapabilities {
@@ -758,13 +769,16 @@ final class WiFiAwareController {
             width: max(1, Int(bounds.width)),
             height: max(1, Int(bounds.height))
         )
+        let maximumDecodeDimensions = dimensions.height >= dimensions.width
+            ? PixelDimensions(width: 2_160, height: 3_840)
+            : PixelDimensions(width: 3_840, height: 2_160)
         return MonitorDisplayCapabilities(
             nativePixels: dimensions,
             viewportPixels: dimensions,
             orientation: Self.currentOrientation,
             hevc: HEVCDecodeCapabilities(
                 supported: VTIsHardwareDecodeSupported(kCMVideoCodecType_HEVC),
-                maximumDimensions: PixelDimensions(width: 3_840, height: 2_160),
+                maximumDimensions: maximumDecodeDimensions,
                 maximumFramesPerSecond: 60,
                 profiles: ["main", "main10"]
             )
@@ -780,17 +794,25 @@ final class WiFiAwareController {
         }
     }
 
-    private static func previewConfiguration(from hello: ControlMessage) -> PreviewConfiguration {
-        var width = 1_920
-        var height = 1_080
-        if case .object(let display)? = hello.payload["display"] {
-            if case .integer(let value)? = display["viewportWidthPx"] { width = value }
-            if case .integer(let value)? = display["viewportHeightPx"] { height = value }
+    private static func previewConfiguration(
+        from hello: ControlMessage,
+        captureDimensions: PixelDimensions?
+    ) -> PreviewConfiguration {
+        let requested = captureDimensions ?? PixelDimensions(width: 1_080, height: 1_440)
+        var maximum = requested.height >= requested.width
+            ? PixelDimensions(width: 2_160, height: 3_840)
+            : PixelDimensions(width: 3_840, height: 2_160)
+        if case .object(let hevc)? = hello.payload["hevc"],
+           case .integer(let maxWidth)? = hevc["maxWidthPx"],
+           case .integer(let maxHeight)? = hevc["maxHeightPx"] {
+            maximum = PixelDimensions(width: maxWidth, height: maxHeight)
         }
-        width = max(16, min(3_840, width)) & ~1
-        height = max(16, min(2_160, height)) & ~1
+        let dimensions = PreviewNegotiator.aspectPreservingDimensions(
+            requested: requested,
+            maximum: maximum
+        )
         return PreviewConfiguration(
-            dimensions: PixelDimensions(width: width, height: height),
+            dimensions: dimensions,
             framesPerSecond: 30,
             bitrate: 10_000_000,
             profile: "main",
@@ -849,28 +871,21 @@ final class WiFiAwareController {
               (96 ... 127).contains(payloadType),
               (256 ... 65_507).contains(maximumPacketSize)
         else { throw ControlProtocolError.malformedMessage }
-        let rtpService: String?
-        if case .string(let value)? = rtp["rtpService"] { rtpService = value }
-        else { rtpService = nil }
-        let rtcpService: String?
-        if case .string(let value)? = rtp["rtcpService"] { rtcpService = value }
-        else { rtcpService = nil }
         return PreviewNetworkConfiguration(
             destinationAddress: destinationAddress,
             rtpPort: rtpPortValue,
             rtcpPort: rtcpPortValue,
             payloadType: payloadTypeValue,
             mediaSSRC: ssrcValue,
-            maximumRTPPacketSize: maximumPacketSize,
-            rtpService: rtpService,
-            rtcpService: rtcpService
+            maximumRTPPacketSize: maximumPacketSize
         )
     }
 
     private static func destinationDescription(_ endpoint: NWEndpoint?) -> String {
         let description = endpoint?.debugDescription ?? "wifi-aware-peer"
-        return String(decoding: description.utf8.prefix(255), as: UTF8.self)
+        let sanitized = String(decoding: description.utf8.prefix(255), as: UTF8.self)
             .trimmingCharacters(in: .controlCharacters)
+        return sanitized.isEmpty ? "wifi-aware-peer" : sanitized
     }
 
     private static func makeSessionId() -> String {
@@ -928,25 +943,19 @@ private struct NegotiatedPreview: Sendable {
 }
 
 struct PhotoEndpointAdvertisement: Sendable {
-    var port: UInt16?
-    var service: String?
+    var port: UInt16
 }
 
 enum WiFiAwarePhotoError: LocalizedError {
-    case additionalConnectionsUnavailable
     case peerUnavailable
     case sessionTokenUnavailable
     case listenerTimedOut
-    case photoServiceMissing
 
     var errorDescription: String? {
         switch self {
-        case .additionalConnectionsUnavailable:
-            "成片 HTTP 通道需要 iOS 26.4 或更高版本的 Wi-Fi Aware 附加连接 API。"
         case .peerUnavailable: "无法从当前 Wi-Fi Aware 数据路径识别已选择的对端。"
         case .sessionTokenUnavailable: "本次会话的临时访问令牌尚未建立。"
         case .listenerTimedOut: "成片 HTTP 服务启动超时。"
-        case .photoServiceMissing: "成片 Wi-Fi Aware 服务没有在 Info.plist 中声明。"
         }
     }
 }

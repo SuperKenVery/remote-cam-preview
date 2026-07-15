@@ -1,6 +1,12 @@
 import CoreMedia
 import Foundation
+import OSLog
 import VideoToolbox
+
+private let hevcEncoderLogger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "RemoteCamPreview",
+    category: "HEVCEncoder"
+)
 
 struct EncodedHEVCAccessUnit: Sendable {
     var nalUnits: [Data]
@@ -31,6 +37,8 @@ final class HEVCEncoder: @unchecked Sendable {
 
     private let lock = NSLock()
     private var session: VTCompressionSession?
+    private var configuredDimensions = (width: 0, height: 0)
+    private var didLogSourceDimensions = false
 
     func configure(width: Int32, height: Int32, bitrate: Int, framesPerSecond: Int) throws {
         lock.lock()
@@ -53,21 +61,34 @@ final class HEVCEncoder: @unchecked Sendable {
             refcon: Unmanaged.passUnretained(self).toOpaque(),
             compressionSessionOut: &newSession
         )
-        guard status == noErr, let newSession else { throw HEVCEncoderError.cannotCreate(status) }
+        guard status == noErr, let newSession else {
+            hevcEncoderLogger.error(
+                "VTCompressionSessionCreate failed status=\(status) dimensions=\(width)x\(height)"
+            )
+            throw HEVCEncoderError.cannotCreate(status)
+        }
         session = newSession
+        configuredDimensions = (Int(width), Int(height))
+        didLogSourceDimensions = false
 
         try set(kVTCompressionPropertyKey_RealTime, kCFBooleanTrue)
         try set(kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse)
-        try set(kVTCompressionPropertyKey_AllowOpenGOP, kCFBooleanFalse)
-        try set(kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, kCFBooleanTrue)
+        setIfSupported(kVTCompressionPropertyKey_AllowOpenGOP, kCFBooleanFalse)
+        setIfSupported(kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, kCFBooleanTrue)
         try set(kVTCompressionPropertyKey_ExpectedFrameRate, framesPerSecond as CFNumber)
         try set(kVTCompressionPropertyKey_AverageBitRate, bitrate as CFNumber)
-        try set(kVTCompressionPropertyKey_DataRateLimits, [bitrate / 8 * 2, 2] as CFArray)
+        setIfSupported(kVTCompressionPropertyKey_DataRateLimits, [bitrate / 8 * 2, 2] as CFArray)
         try set(kVTCompressionPropertyKey_MaxKeyFrameInterval, (framesPerSecond * 2) as CFNumber)
         try set(kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_HEVC_Main_AutoLevel)
 
         let prepareStatus = VTCompressionSessionPrepareToEncodeFrames(newSession)
-        guard prepareStatus == noErr else { throw HEVCEncoderError.encodeFailed(prepareStatus) }
+        guard prepareStatus == noErr else {
+            hevcEncoderLogger.error("VTCompressionSessionPrepareToEncodeFrames failed status=\(prepareStatus)")
+            throw HEVCEncoderError.encodeFailed(prepareStatus)
+        }
+        hevcEncoderLogger.notice(
+            "HEVC encoder configured dimensions=\(width)x\(height) fps=\(framesPerSecond) bitrate=\(bitrate)"
+        )
     }
 
     func encode(_ sampleBuffer: CMSampleBuffer, forceKeyFrame: Bool = false) throws {
@@ -77,6 +98,12 @@ final class HEVCEncoder: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         guard let session else { throw HEVCEncoderError.cannotCreate(-1) }
+        if !didLogSourceDimensions {
+            didLogSourceDimensions = true
+            hevcEncoderLogger.notice(
+                "HEVC source=\(CVPixelBufferGetWidth(imageBuffer))x\(CVPixelBufferGetHeight(imageBuffer)) target=\(self.configuredDimensions.width)x\(self.configuredDimensions.height)"
+            )
+        }
 
         var flags: VTEncodeInfoFlags = []
         let properties: CFDictionary? = forceKeyFrame
@@ -105,7 +132,20 @@ final class HEVCEncoder: @unchecked Sendable {
     private func set(_ key: CFString, _ value: CFTypeRef) throws {
         guard let session else { throw HEVCEncoderError.cannotCreate(-1) }
         let status = VTSessionSetProperty(session, key: key, value: value)
-        guard status == noErr else { throw HEVCEncoderError.propertyFailed(key, status) }
+        guard status == noErr else {
+            hevcEncoderLogger.error("Required HEVC property failed key=\(key, privacy: .public) status=\(status)")
+            throw HEVCEncoderError.propertyFailed(key, status)
+        }
+    }
+
+    private func setIfSupported(_ key: CFString, _ value: CFTypeRef) {
+        guard let session else { return }
+        let status = VTSessionSetProperty(session, key: key, value: value)
+        if status != noErr {
+            hevcEncoderLogger.notice(
+                "Optional HEVC property ignored key=\(key, privacy: .public) status=\(status)"
+            )
+        }
     }
 
     private func invalidateLocked() {
@@ -211,4 +251,3 @@ final class HEVCEncoder: @unchecked Sendable {
         return result
     }
 }
-

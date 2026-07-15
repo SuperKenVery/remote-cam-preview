@@ -17,7 +17,6 @@
 ## 跨平台与真机验收
 
 - [ ] 解决 Android Aware Pairing 缓存的 NPK/NIK 无法通过公开 API 导出为 `WifiAwareNetworkSpecifier` PMK 的跨平台安全 NDP 凭据交换；在此之前不能为了 demo 静默退化为开放 NDP。
-- [ ] 为 iOS 26.0–26.3 补齐可与 Android 互通的额外 Aware service path；当前直接跨平台候选要求 iOS 26.4+。
 - [ ] 在至少一台支持 Wi-Fi Aware 的 iPhone/iPad 与 Android 真机上双向验证：发现/配对/NDP、HEVC 30 fps/约 10 Mbps、协商尺寸、照片 SHA-256、断线回收和玻璃到玻璃延迟。
 - [ ] 修复本机 Xcode/CoreSimulator runtime 版本不匹配后实际执行 iOS XCTest；目前仅完成 `build-for-testing` 编译。
 

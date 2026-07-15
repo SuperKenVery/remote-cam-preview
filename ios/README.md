@@ -19,11 +19,9 @@ Before installing on a device, replace the example bundle identifier and select
 a development team whose provisioning profile includes the Wi-Fi Aware
 entitlement. The capture role provides the application-layer WebSocket, RTP,
 RTCP, and photo HTTP endpoints; the monitor role initiates those connections.
-All declared services remain publishable and subscribable so the selected,
-paired peer can be used for additional Wi-Fi Aware data paths. iOS 26.4 and
-later use the additional-connections API; iOS 26.0–26.3 use the declared
-`_remote-photo._tcp`, `_remote-preview._udp`, and `_remote-feedback._udp`
-services.
+The app targets iOS 26.4 or later. Only the control service is declared;
+RTP, RTCP, and photo transfer use the additional-connections API over the
+already established paired peer.
 
 The control path uses Network.framework WebSocket text messages, the preview
 uses bounded 1200-byte RFC 7798 HEVC/RTP datagrams plus RTCP receiver reports

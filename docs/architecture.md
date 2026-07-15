@@ -11,7 +11,7 @@ Remote Cam Preview is a symmetric two-device application. A role is selected for
 
 Android 14–16 exposes NAN Pairing setup/verification and cached peer aliases, but does not expose the cached NPK/NIK as the PMK/PMKID required by `WifiAwareNetworkSpecifier`. The Android transport therefore accepts only an authenticated, per-session `SecureDataPathCredential`; without a platform/vendor-supported cross-device bootstrap it reports a blocked secure-data-path state. It never substitutes an open NDP, a fixed PSK, or a credential derived from public discovery metadata. This is a real-device interoperability gate, not a condition that protocol or emulator tests can waive.
 
-iOS 26.4 added scoped additional connections that can reuse a paired peer with numeric ports. On iOS 26.0–26.3 the implementation falls back to separate declared Aware services for preview, feedback, and photos. Android does not yet negotiate those three additional service-specific data paths, so the present cross-platform candidate requires iOS 26.4 or newer; this remains a documented gap against the requested iOS 26.0 minimum.
+iOS 最低支持 26.4。控制连接建立后，RTP、RTCP 与照片通道统一通过 scoped additional connections 和协商端口复用已配对对端；不保留 iOS 26.0–26.3 的额外 service-specific 分支。
 
 ## Logical channels
 

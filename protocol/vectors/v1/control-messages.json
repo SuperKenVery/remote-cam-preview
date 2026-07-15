@@ -132,6 +132,15 @@
       }
     },
     {
+      "name": "select preview pose guide",
+      "message": {
+        "type": "preview.poseGuide",
+        "requestId": "pose-guide-1",
+        "protocolVersion": "1.0",
+        "payload": {"guideId": 2}
+      }
+    },
+    {
       "name": "photo saved on capture device",
       "message": {
         "type": "photo.captured",
@@ -235,6 +244,16 @@
     }
   ],
   "invalid": [
+    {
+      "name": "pose guide ID out of range",
+      "message": {
+        "type": "preview.poseGuide",
+        "requestId": "bad-pose-guide",
+        "protocolVersion": "1.0",
+        "payload": {"guideId": 6}
+      },
+      "expectedError": "INVALID_FIELD"
+    },
     {
       "name": "unsupported protocol major",
       "message": {

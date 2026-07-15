@@ -14,6 +14,7 @@
         "preview.stop",
         "preview.reconfigure",
         "preview.tierRequest",
+        "preview.poseGuide",
         "photo.receivePreference",
         "photo.captured",
         "photo.available",
@@ -61,6 +62,10 @@
     {
       "if": {"properties": {"type": {"const": "preview.tierRequest"}}},
       "then": {"properties": {"payload": {"$ref": "#/$defs/previewTierRequest"}}}
+    },
+    {
+      "if": {"properties": {"type": {"const": "preview.poseGuide"}}},
+      "then": {"properties": {"payload": {"$ref": "#/$defs/previewPoseGuide"}}}
     },
     {
       "if": {"properties": {"type": {"const": "photo.receivePreference"}}},
@@ -311,6 +316,13 @@
         "maxWidthPx": {"type": "integer", "minimum": 16, "maximum": 16384},
         "maxHeightPx": {"type": "integer", "minimum": 16, "maximum": 16384}
       },
+      "additionalProperties": true,
+      "maxProperties": 128
+    },
+    "previewPoseGuide": {
+      "type": "object",
+      "required": ["guideId"],
+      "properties": {"guideId": {"type": "integer", "minimum": 0, "maximum": 5}},
       "additionalProperties": true,
       "maxProperties": 128
     },

@@ -1,4 +1,5 @@
 import DeviceDiscoveryUI
+import Network
 import SwiftUI
 import WiFiAware
 
@@ -42,7 +43,7 @@ struct WiFiAwarePairingControls: View {
                                 onStartPublishing(peer)
                             } label: {
                                 Label(
-                                    "等待 \(peer.name ?? "已配对设备") 连接",
+                                    "启动控制服务，等待 \(peer.name ?? "已配对设备")",
                                     systemImage: "antenna.radiowaves.left.and.right"
                                 )
                                 .frame(maxWidth: .infinity)
@@ -51,7 +52,7 @@ struct WiFiAwarePairingControls: View {
                         }
                     }
 
-                    Text("拍摄端提供本次会话的控制、预览和成片服务。")
+                    Text("系统配对完成后，还必须点击上方“启动控制服务”；仅完成配对不会开始监听。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
@@ -63,13 +64,19 @@ struct WiFiAwarePairingControls: View {
                         onSelect: { endpoint in
                             onPairingDismissed()
                             onEndpointSelected(endpoint)
+                        },
+                        label: {
+                            Label("查找并连接", systemImage: "magnifyingglass")
+                                .frame(maxWidth: .infinity)
+                        },
+                        fallback: {
+                            Label("系统查找不可用", systemImage: "exclamationmark.triangle")
+                        },
+                        parameters: {
+                            NWParameters.tcp
+                                .wifiAware { $0.performanceMode = .realtime }
                         }
-                    ) {
-                        Label("查找并连接", systemImage: "magnifyingglass")
-                            .frame(maxWidth: .infinity)
-                    } fallback: {
-                        Label("系统查找不可用", systemImage: "exclamationmark.triangle")
-                    }
+                    )
                     .simultaneousGesture(TapGesture().onEnded(onPairingPresented))
                     .buttonStyle(.borderedProminent)
 

@@ -2,6 +2,29 @@ import XCTest
 @testable import RemoteCamPreview
 
 final class PreviewNegotiatorTests: XCTestCase {
+    func testDimensionLimitPreservesPortraitAspectRatio() {
+        let result = PreviewNegotiator.aspectPreservingDimensions(
+            requested: PixelDimensions(width: 1_170, height: 2_532),
+            maximum: PixelDimensions(width: 3_840, height: 2_160)
+        )
+
+        XCTAssertEqual(result, PixelDimensions(width: 998, height: 2_160))
+        XCTAssertEqual(
+            result.aspectRatio,
+            PixelDimensions(width: 1_170, height: 2_532).aspectRatio,
+            accuracy: 0.001
+        )
+    }
+
+    func testPortraitDecoderLimitKeepsNativeViewportDimensions() {
+        let result = PreviewNegotiator.aspectPreservingDimensions(
+            requested: PixelDimensions(width: 1_170, height: 2_532),
+            maximum: PixelDimensions(width: 2_160, height: 3_840)
+        )
+
+        XCTAssertEqual(result, PixelDimensions(width: 1_170, height: 2_532))
+    }
+
     func testUsesMonitorViewportInsteadOfFixedPreset() throws {
         let monitor = MonitorDisplayCapabilities(
             nativePixels: PixelDimensions(width: 1_179, height: 2_556),
@@ -26,4 +49,3 @@ final class PreviewNegotiatorTests: XCTestCase {
         XCTAssertEqual(result.bitrate, 10_000_000)
     }
 }
-

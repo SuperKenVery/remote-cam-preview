@@ -73,8 +73,7 @@ final class RemoteVideoUIView: UIView {
 
     var displayLayer: AVSampleBufferDisplayLayer {
         let layer = layer as! AVSampleBufferDisplayLayer
-        layer.videoGravity = .resizeAspectFill
+        layer.videoGravity = .resizeAspect
         return layer
     }
 }
-

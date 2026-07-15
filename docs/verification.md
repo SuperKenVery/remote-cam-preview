@@ -15,6 +15,5 @@ This file separates checks that were actually run from hardware acceptance that 
 
 - No physical iOS/Android Wi-Fi Aware pairing or data path was available in this workspace, so no iOS→Android, Android→iOS, same-platform, camera, codec, Photos/MediaStore, or disconnect timing acceptance result is recorded.
 - Android's public NAN Pairing API caches NPK/NIK but does not expose the key material required by the API 36 `WifiAwareNetworkSpecifier`. Cross-platform secure-NDP credential bootstrap therefore remains a platform/vendor real-device gate; the app refuses an open NDP.
-- iOS 26.0–26.3 requires extra service-specific Aware data paths for RTP, RTCP, and photos. The Android implementation currently covers the iOS 26.4+ numeric additional-connection path, not those older service endpoints.
 - Dynamic orientation/reconfiguration, negotiated capture-format behavior, hardware HEVC parameter-set behavior, 30 fps / 10 Mbit/s stability, photo-versus-preview scheduling, and p50/p95 glass-to-glass latency still require the procedure in `device-test-plan.md`.
 - Network.framework's typed WebSocket over a `WAEndpoint` does not expose a request-target setter. Android accepts both `/v1/events` and the Aware-scoped `/` compatibility path, but the actual cross-vendor handshake must be captured on devices.

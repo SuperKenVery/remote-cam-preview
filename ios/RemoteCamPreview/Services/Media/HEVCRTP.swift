@@ -50,7 +50,7 @@ struct RTPPacket: Equatable, Sendable {
         sequenceNumber = UInt16(bytes[2]) << 8 | UInt16(bytes[3])
         timestamp = UInt32(bytes[4]) << 24 | UInt32(bytes[5]) << 16 | UInt32(bytes[6]) << 8 | UInt32(bytes[7])
         ssrc = UInt32(bytes[8]) << 24 | UInt32(bytes[9]) << 16 | UInt32(bytes[10]) << 8 | UInt32(bytes[11])
-        payload = data.dropFirst(Self.headerSize)
+        payload = Data(data.dropFirst(Self.headerSize))
         guard !payload.isEmpty else { throw HEVCRTPError.malformedPacket }
     }
 }
@@ -122,9 +122,10 @@ struct HEVCRTPPacketizer: Sendable {
                 var temporalId = UInt8.max
                 var forbiddenBit: UInt8 = 0
                 for nal in aggregated {
-                    forbiddenBit |= nal[0] & 0x80
-                    layerId = min(layerId, ((nal[0] & 0x01) << 5) | ((nal[1] >> 3) & 0x1f))
-                    temporalId = min(temporalId, nal[1] & 0x07)
+                    let header = [UInt8](nal.prefix(2))
+                    forbiddenBit |= header[0] & 0x80
+                    layerId = min(layerId, ((header[0] & 0x01) << 5) | ((header[1] >> 3) & 0x1f))
+                    temporalId = min(temporalId, header[1] & 0x07)
                 }
                 guard temporalId != 0 else { throw HEVCRTPError.malformedNALUnit }
                 var payload = Data([
@@ -163,7 +164,7 @@ struct HEVCRTPPacketizer: Sendable {
             let fuIndicator0 = (bytes[0] & 0x81) | (49 << 1)
             let fuIndicator1 = bytes[1]
             let fragmentCapacity = maxPayload - 3
-            let body = nalUnit.dropFirst(2)
+            let body = [UInt8](nalUnit.dropFirst(2))
             var offset = 0
 
             while offset < body.count {
@@ -172,7 +173,7 @@ struct HEVCRTPPacketizer: Sendable {
                 let end = offset + count == body.count
                 var payload = Data([fuIndicator0, fuIndicator1])
                 payload.append((start ? 0x80 : 0) | (end ? 0x40 : 0) | originalType)
-                payload.append(body[offset ..< offset + count])
+                payload.append(contentsOf: body[offset ..< offset + count])
                 packets.append(makePacket(
                     payload: payload,
                     timestamp: timestamp,
@@ -279,18 +280,19 @@ struct HEVCRTPDepacketizer: Sendable {
     }
 
     private mutating func unpackAggregation(_ packet: RTPPacket) throws -> [DepacketizedNALUnit] {
+        let payload = [UInt8](packet.payload)
         var offset = 2
         var result: [DepacketizedNALUnit] = []
-        while offset < packet.payload.count {
+        while offset < payload.count {
             guard result.count < 1_024 else { throw HEVCRTPError.resourceLimit }
-            guard offset + 2 <= packet.payload.count else { throw HEVCRTPError.malformedPacket }
-            let length = Int(packet.payload[offset]) << 8 | Int(packet.payload[offset + 1])
+            guard offset + 2 <= payload.count else { throw HEVCRTPError.malformedPacket }
+            let length = Int(payload[offset]) << 8 | Int(payload[offset + 1])
             offset += 2
-            guard length >= 2, offset + length <= packet.payload.count else {
+            guard length >= 2, offset + length <= payload.count else {
                 throw HEVCRTPError.malformedPacket
             }
             result.append(DepacketizedNALUnit(
-                data: packet.payload[offset ..< offset + length],
+                data: Data(payload[offset ..< offset + length]),
                 timestamp: packet.timestamp,
                 endsAccessUnit: false
             ))

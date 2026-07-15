@@ -42,6 +42,7 @@ KNOWN_MESSAGE_TYPES = frozenset(
         "preview.stop",
         "preview.reconfigure",
         "preview.tierRequest",
+        "preview.poseGuide",
         "photo.receivePreference",
         "photo.captured",
         "photo.available",
@@ -382,6 +383,8 @@ def _validate_payload(message_type: str, payload: dict[str, Any]) -> None:
             _integer(payload["maxWidthPx"], f"{path}.maxWidthPx", 16, 16_384)
         if "maxHeightPx" in payload:
             _integer(payload["maxHeightPx"], f"{path}.maxHeightPx", 16, 16_384)
+    elif message_type == "preview.poseGuide":
+        _integer(_required(payload, "guideId", path), f"{path}.guideId", 0, 5)
     elif message_type == "photo.receivePreference":
         _boolean(_required(payload, "enabled", path), f"{path}.enabled")
     elif message_type == "photo.captured":

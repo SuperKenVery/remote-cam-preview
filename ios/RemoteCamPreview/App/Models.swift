@@ -196,6 +196,13 @@ struct PreviewConfiguration: Codable, Equatable, Sendable {
     var level: String
 }
 
+struct ReceivedPhoto: Identifiable, Equatable, Sendable {
+    var id: String { metadata.photoId }
+    var metadata: PhotoMetadata
+    var fileURL: URL
+    var isSavedToPhotoLibrary: Bool
+}
+
 struct CaptureFormatCandidate: Equatable, Sendable {
     var dimensions: PixelDimensions
     var maximumFramesPerSecond: Int

@@ -135,8 +135,6 @@ struct ControlMessage: Codable, Equatable, Sendable {
         payloadType: UInt8,
         rtpSSRC: UInt32,
         maximumPacketSize: Int,
-        rtpService: String?,
-        rtcpService: String?,
         photoEndpoint: PhotoEndpointAdvertisement
     ) -> Self {
         var payload: [String: JSONValue] = [
@@ -168,16 +166,7 @@ struct ControlMessage: Codable, Equatable, Sendable {
                 "maxRtpPacketSize": .integer(maximumPacketSize),
             ]),
         ]
-        if case .object(var rtp)? = payload["rtp"] {
-            if let rtpService { rtp["rtpService"] = .string(rtpService) }
-            if let rtcpService { rtp["rtcpService"] = .string(rtcpService) }
-            payload["rtp"] = .object(rtp)
-        }
-        if let port = photoEndpoint.port {
-            payload["photoEndpoint"] = .object(["port": .integer(Int(port))])
-        } else if let service = photoEndpoint.service {
-            payload["photoEndpoint"] = .object(["serviceName": .string(service)])
-        }
+        payload["photoEndpoint"] = .object(["port": .integer(Int(photoEndpoint.port))])
         return Self(type: "session.accepted", requestId: requestId, payload: payload)
     }
 
@@ -219,6 +208,7 @@ enum ControlMessageCodec {
     private static let knownTypes: Set<String> = [
         "session.hello", "session.accepted", "preview.start", "preview.stop",
         "preview.reconfigure", "preview.tierRequest", "photo.receivePreference",
+        "preview.poseGuide",
         "photo.captured", "photo.available", "photo.transferResult", "heartbeat.ping",
         "heartbeat.pong", "keyframe.request", "error", "session.end",
     ]
@@ -276,6 +266,10 @@ enum ControlMessageCodec {
             guard case .bool? = message.payload["enabled"] else {
                 throw ControlProtocolError.malformedMessage
             }
+        case "preview.poseGuide":
+            guard case .integer(let guideId)? = message.payload["guideId"],
+                  (0 ... 5).contains(guideId)
+            else { throw ControlProtocolError.malformedMessage }
         case "heartbeat.ping", "heartbeat.pong":
             guard case .integer(let value)? = message.payload["sentAtMs"], value >= 0 else {
                 throw ControlProtocolError.malformedMessage

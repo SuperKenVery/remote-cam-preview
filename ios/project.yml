@@ -1,16 +1,17 @@
 name: RemoteCamPreview
 
 options:
-  bundleIdPrefix: com.example
+  bundleIdPrefix: com.ken
   deploymentTarget:
-    iOS: "26.0"
+    iOS: "26.4"
   xcodeVersion: "26.0"
   createIntermediateGroups: true
 
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "26.4"
+    DEVELOPMENT_TEAM: 2SY72R44WU
     TARGETED_DEVICE_FAMILY: "1,2"
     ENABLE_USER_SCRIPT_SANDBOXING: true
     CLANG_ENABLE_MODULES: true
@@ -23,7 +24,7 @@ targets:
       - path: RemoteCamPreview
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.example.RemoteCamPreview
+        PRODUCT_BUNDLE_IDENTIFIER: com.ken.RemoteCamPreview
         PRODUCT_NAME: RemoteCamPreview
         MARKETING_VERSION: 0.1.0
         CURRENT_PROJECT_VERSION: 1
@@ -54,7 +55,7 @@ targets:
       - target: RemoteCamPreview
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.example.RemoteCamPreviewTests
+        PRODUCT_BUNDLE_IDENTIFIER: com.ken.RemoteCamPreviewTests
         GENERATE_INFOPLIST_FILE: true
         CODE_SIGNING_ALLOWED: false
 

@@ -48,6 +48,21 @@ enum PreviewNegotiator {
         )
     }
 
+    static func aspectPreservingDimensions(
+        requested: PixelDimensions,
+        maximum: PixelDimensions
+    ) -> PixelDimensions {
+        let requestedWidth = max(16, requested.width)
+        let requestedHeight = max(16, requested.height)
+        let widthScale = Double(max(16, maximum.width)) / Double(requestedWidth)
+        let heightScale = Double(max(16, maximum.height)) / Double(requestedHeight)
+        let scale = min(1, widthScale, heightScale)
+
+        let width = max(16, Int((Double(requestedWidth) * scale).rounded(.down))) & ~1
+        let height = max(16, Int((Double(requestedHeight) * scale).rounded(.down))) & ~1
+        return PixelDimensions(width: width, height: height)
+    }
+
     private static func score(
         _ candidate: CaptureFormatCandidate,
         viewport: PixelDimensions
@@ -63,4 +78,3 @@ enum PreviewNegotiator {
         return (Int(usefulPixels), retainedFraction, -excessPixels)
     }
 }
-

@@ -5,8 +5,6 @@ import WiFiAware
 struct PreviewListenerAdvertisement: Sendable {
     var rtpPort: UInt16
     var rtcpPort: UInt16
-    var rtpService: String?
-    var rtcpService: String?
 }
 
 struct PreviewNetworkConfiguration: Sendable {
@@ -16,13 +14,10 @@ struct PreviewNetworkConfiguration: Sendable {
     var payloadType: UInt8
     var mediaSSRC: UInt32
     var maximumRTPPacketSize: Int
-    var rtpService: String?
-    var rtcpService: String?
 }
 
 enum PreviewTransportError: LocalizedError {
     case missingAwarePeer
-    case missingServiceDeclaration
     case invalidNegotiation
     case listenerTimedOut
     case connectionTimedOut
@@ -31,7 +26,6 @@ enum PreviewTransportError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .missingAwarePeer: "无法识别当前 Wi-Fi Aware 对端。"
-        case .missingServiceDeclaration: "实时预览的 Wi-Fi Aware 服务没有在 Info.plist 中声明。"
         case .invalidNegotiation: "实时预览网络参数无效。"
         case .listenerTimedOut: "RTP/RTCP 监听端点启动超时。"
         case .connectionTimedOut: "RTP/RTCP 数据路径连接超时。"
@@ -65,10 +59,6 @@ final class PreviewTransport {
 
     func prepareCamera(
         peer: WAPairedDevice,
-        rtpPublishableService: WAPublishableService?,
-        rtcpPublishableService: WAPublishableService?,
-        rtpServiceName: String,
-        rtcpServiceName: String,
         mediaSSRC: UInt32,
         payloadType: UInt8,
         maximumPacketSize: Int
@@ -78,32 +68,12 @@ final class PreviewTransport {
         expectedPayloadType = payloadType
         self.maximumPacketSize = maximumPacketSize
 
-        let rtpProvider: WAPublisherListener
-        let rtcpProvider: WAPublisherListener
-        let advertisedRTPService: String?
-        let advertisedRTCPService: String?
-        if #available(iOS 26.4, *) {
-            rtpProvider = .wifiAware(.addingConnections(from: .selected([peer])))
-            rtcpProvider = .wifiAware(.addingConnections(from: .selected([peer])))
-            advertisedRTPService = nil
-            advertisedRTCPService = nil
-        } else {
-            guard let rtpPublishableService, let rtcpPublishableService else {
-                throw PreviewTransportError.missingServiceDeclaration
-            }
-            rtpProvider = .wifiAware(.connecting(
-                to: rtpPublishableService,
-                from: .selected([peer]),
-                datapath: .realtime
-            ))
-            rtcpProvider = .wifiAware(.connecting(
-                to: rtcpPublishableService,
-                from: .selected([peer]),
-                datapath: .realtime
-            ))
-            advertisedRTPService = rtpServiceName
-            advertisedRTCPService = rtcpServiceName
-        }
+        let rtpProvider: WAPublisherListener = .wifiAware(
+            .addingConnections(from: .selected([peer]))
+        )
+        let rtcpProvider: WAPublisherListener = .wifiAware(
+            .addingConnections(from: .selected([peer]))
+        )
 
         let parameters = Self.parameters
         let rtpListener = try NetworkListener<UDP>(for: rtpProvider, using: parameters)
@@ -161,18 +131,13 @@ final class PreviewTransport {
         let ports = try await waitForPorts(rtpListener: rtpListener, rtcpListener: rtcpListener)
         return PreviewListenerAdvertisement(
             rtpPort: ports.rtp,
-            rtcpPort: ports.rtcp,
-            rtpService: advertisedRTPService,
-            rtcpService: advertisedRTCPService
+            rtcpPort: ports.rtcp
         )
     }
 
     func connectMonitor(
-        peer: WAPairedDevice,
         controlRemoteEndpoint: NWEndpoint?,
-        configuration: PreviewNetworkConfiguration,
-        rtpSubscribableService: WASubscribableService?,
-        rtcpSubscribableService: WASubscribableService?
+        configuration: PreviewNetworkConfiguration
     ) async throws {
         stop()
         guard (96 ... 127).contains(configuration.payloadType),
@@ -186,23 +151,13 @@ final class PreviewTransport {
         receiverSSRC = UInt32.random(in: 1 ... .max)
 
         let endpoints: (rtp: WAEndpoint, rtcp: WAEndpoint)
-        if #available(iOS 26.4, *),
-           let controlRemoteEndpoint,
-           let rtpPort = NWEndpoint.Port(rawValue: configuration.rtpPort),
-           let rtcpPort = NWEndpoint.Port(rawValue: configuration.rtcpPort),
-           let rtp = controlRemoteEndpoint.wifiAware(port: rtpPort),
-           let rtcp = controlRemoteEndpoint.wifiAware(port: rtcpPort) {
-            endpoints = (rtp, rtcp)
-        } else {
-            guard configuration.rtpService != nil,
-                  configuration.rtcpService != nil,
-                  let rtpSubscribableService,
-                  let rtcpSubscribableService
-            else { throw PreviewTransportError.missingServiceDeclaration }
-            async let rtp = discover(service: rtpSubscribableService, peer: peer)
-            async let rtcp = discover(service: rtcpSubscribableService, peer: peer)
-            endpoints = try await (rtp, rtcp)
-        }
+        guard let controlRemoteEndpoint,
+              let rtpPort = NWEndpoint.Port(rawValue: configuration.rtpPort),
+              let rtcpPort = NWEndpoint.Port(rawValue: configuration.rtcpPort),
+              let rtp = controlRemoteEndpoint.wifiAware(port: rtpPort),
+              let rtcp = controlRemoteEndpoint.wifiAware(port: rtcpPort)
+        else { throw PreviewTransportError.missingAwarePeer }
+        endpoints = (rtp, rtcp)
 
         let parameters = Self.parameters
         let rtpConnection = NetworkConnection<UDP>(to: endpoints.rtp, using: parameters)
@@ -349,9 +304,11 @@ final class PreviewTransport {
         rtpListener: NetworkListener<UDP>,
         rtcpListener: NetworkListener<UDP>
     ) async throws -> (rtp: UInt16, rtcp: UInt16) {
-        for _ in 0 ..< 400 {
+        for _ in 0 ..< 250 {
             if let rtp = rtpListener.port?.rawValue,
-               let rtcp = rtcpListener.port?.rawValue {
+               let rtcp = rtcpListener.port?.rawValue,
+               rtp != 0,
+               rtcp != 0 {
                 return (rtp, rtcp)
             }
             try await Task.sleep(for: .milliseconds(20))
@@ -372,30 +329,6 @@ final class PreviewTransport {
         throw PreviewTransportError.connectionTimedOut
     }
 
-    private func discover(service: WASubscribableService, peer: WAPairedDevice) async throws -> WAEndpoint {
-        let provider: WASubscriberBrowser = .wifiAware(
-            .connecting(to: .selected([peer]), from: service)
-        )
-        let browser = NetworkBrowser(
-            for: provider,
-            using: NWParameters.udp.wifiAware { $0.performanceMode = .realtime }
-        )
-        return try await withThrowingTaskGroup(of: WAEndpoint.self) { group in
-            group.addTask {
-                try await browser.run { endpoints in
-                    guard let endpoint = endpoints.first else { return .continue }
-                    return .finish(endpoint)
-                }
-            }
-            group.addTask {
-                try await Task.sleep(for: .seconds(8))
-                throw PreviewTransportError.connectionTimedOut
-            }
-            let endpoint = try await group.next()!
-            group.cancelAll()
-            return endpoint
-        }
-    }
 }
 
 private struct RTPReceiveStatistics {

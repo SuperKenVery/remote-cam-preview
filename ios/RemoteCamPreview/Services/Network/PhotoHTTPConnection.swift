@@ -1,5 +1,11 @@
 import Foundation
 import Network
+import OSLog
+
+private let photoHTTPLogger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "RemoteCamPreview",
+    category: "PhotoHTTP"
+)
 
 enum PhotoHTTPConnectionError: LocalizedError {
     case malformedResponse
@@ -101,8 +107,15 @@ enum PhotoHTTPConnection {
             )
         }
 
+        let fileExtension = URL(filePath: metadata.fileName).pathExtension
+        let receivedFileName = fileExtension.isEmpty
+            ? "remote-cam-receive-\(metadata.photoId)"
+            : "remote-cam-receive-\(metadata.photoId).\(fileExtension)"
         let fileURL = FileManager.default.temporaryDirectory
-            .appending(path: "remote-cam-receive-\(metadata.photoId).tmp")
+            .appending(path: receivedFileName)
+        photoHTTPLogger.notice(
+            "Downloading photo bytes=\(metadata.byteSize) mime=\(metadata.mimeType, privacy: .public) extension=\(fileExtension, privacy: .public)"
+        )
         FileManager.default.createFile(atPath: fileURL.path, contents: nil)
         let handle = try FileHandle(forWritingTo: fileURL)
         do {
@@ -128,6 +141,7 @@ enum PhotoHTTPConnection {
                 received += Int64(frame.content.count)
             }
             try handle.close()
+            photoHTTPLogger.notice("Photo download completed bytes=\(received)")
             return fileURL
         } catch {
             try? handle.close()

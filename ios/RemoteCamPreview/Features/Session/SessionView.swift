@@ -1,4 +1,6 @@
+import ImageIO
 import SwiftUI
+import UIKit
 
 struct SessionView: View {
     @Environment(AppDependencies.self) private var dependencies
@@ -51,8 +53,12 @@ private struct ConnectionPanel: View {
             switch session.phase {
             case .connected:
                 if session.role == .monitor {
-                    Toggle("接收最终成片", isOn: receivePhotosBinding)
-                        .accessibilityIdentifier("receivePhotos.toggle")
+                    if session.receivedPhotos.isEmpty {
+                        Toggle("接收最终成片", isOn: receivePhotosBinding)
+                            .accessibilityIdentifier("receivePhotos.toggle")
+                    } else {
+                        ReceivedPhotoStrip(session: session)
+                    }
                 }
             case .unavailable(let availability):
                 Text(availability.guidance)
@@ -103,6 +109,100 @@ private struct ConnectionPanel: View {
     private var retryButton: some View {
         Button("重试") { Task { await session.retry() } }
             .buttonStyle(.borderedProminent)
+    }
+}
+
+private struct ReceivedPhotoStrip: View {
+    let session: AppSession
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ScrollView(.horizontal) {
+                LazyHStack(spacing: 8) {
+                    ForEach(session.receivedPhotos) { photo in
+                        ReceivedPhotoThumbnail(photo: photo)
+                    }
+                }
+            }
+            .scrollIndicators(.hidden)
+
+            Divider()
+                .frame(height: 58)
+
+            Button {
+                Task { await session.saveAllReceivedPhotos() }
+            } label: {
+                VStack(spacing: 4) {
+                    if session.isSavingReceivedPhotos {
+                        ProgressView()
+                            .frame(width: 24, height: 24)
+                    } else {
+                        Image(systemName: session.hasUnsavedReceivedPhotos
+                              ? "square.and.arrow.down"
+                              : "checkmark.circle.fill")
+                            .font(.title3)
+                    }
+                    Text(session.hasUnsavedReceivedPhotos ? "保存全部" : "已保存")
+                        .font(.caption2)
+                        .lineLimit(1)
+                }
+                .frame(width: 56, height: 64)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(session.isSavingReceivedPhotos || !session.hasUnsavedReceivedPhotos)
+            .accessibilityIdentifier("receivedPhotos.saveAll")
+        }
+        .frame(height: 68)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("已接收 \(session.receivedPhotos.count) 张照片")
+    }
+}
+
+private struct ReceivedPhotoThumbnail: View {
+    let photo: ReceivedPhoto
+    @State private var image: UIImage?
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Group {
+                if let image {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    Rectangle()
+                        .fill(.quaternary)
+                        .overlay { ProgressView() }
+                }
+            }
+            .frame(width: 64, height: 64)
+            .clipShape(.rect(cornerRadius: 8))
+
+            if photo.isSavedToPhotoLibrary {
+                Image(systemName: "checkmark.circle.fill")
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(.white, .green)
+                    .padding(4)
+            }
+        }
+        .task(id: photo.fileURL) {
+            image = await Self.loadThumbnail(at: photo.fileURL)
+        }
+        .accessibilityLabel(photo.isSavedToPhotoLibrary ? "已保存照片" : "待保存照片")
+        .accessibilityIdentifier("receivedPhoto.\(photo.id)")
+    }
+
+    private static func loadThumbnail(at url: URL) async -> UIImage? {
+        await Task.detached(priority: .utility) {
+            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+                  let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                    kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceCreateThumbnailWithTransform: true,
+                    kCGImageSourceThumbnailMaxPixelSize: 192
+                  ] as CFDictionary)
+            else { return nil }
+            return UIImage(cgImage: cgImage)
+        }.value
     }
 }
 

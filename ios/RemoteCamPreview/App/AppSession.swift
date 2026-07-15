@@ -7,11 +7,15 @@ import WiFiAware
 final class AppSession {
     private let dependencies: AppDependencies
     private var photoReceiveTask: Task<Void, Never>?
+    private var pendingPhotoMetadata: [PhotoMetadata] = []
+    private var receivingPhotoID: String?
 
     var routePath: [AppRoute] = []
     var role: DeviceRole?
     var phase: SessionPhase = .checkingCapability
     var receivePhotos = true
+    private(set) var receivedPhotos: [ReceivedPhoto] = []
+    private(set) var isSavingReceivedPhotos = false
     var statusDetail: String?
     var photoTransferStatus: String?
     var lastError: SessionErrorReport?
@@ -23,6 +27,9 @@ final class AppSession {
     }
 
     func prepare() async {
+        dependencies.wifiAware.capturePreviewDimensionsProvider = { [weak camera = dependencies.camera] in
+            camera?.previewDimensions
+        }
         dependencies.mediaPipeline.onRTPPacket = { [weak controller = dependencies.wifiAware] packet in
             Task { @MainActor in controller?.sendRTP(packet) }
         }
@@ -147,10 +154,26 @@ final class AppSession {
         }
     }
 
+    func switchCamera() {
+        guard role == .camera else { return }
+        do {
+            try dependencies.camera.switchCamera()
+        } catch {
+            lastError = Self.report(
+                error,
+                title: "无法翻转相机",
+                stage: "重新配置 AVFoundation 相机输入",
+                suggestion: "等待当前拍照完成后重试；若仍失败，请结束会话后重新进入拍摄端。"
+            )
+        }
+    }
+
     func retry() async {
         dependencies.wifiAware.stop()
         photoReceiveTask?.cancel()
         photoReceiveTask = nil
+        pendingPhotoMetadata.removeAll()
+        receivingPhotoID = nil
         isPreviewStreaming = false
         dependencies.mediaPipeline.stop()
         await prepare()
@@ -163,6 +186,10 @@ final class AppSession {
         dependencies.wifiAware.stop()
         photoReceiveTask?.cancel()
         photoReceiveTask = nil
+        pendingPhotoMetadata.removeAll()
+        receivingPhotoID = nil
+        removeReceivedPhotoFiles()
+        receivedPhotos.removeAll()
         dependencies.camera.onVideoSampleBuffer = nil
         dependencies.camera.stop()
         dependencies.mediaPipeline.stop()
@@ -188,6 +215,8 @@ final class AppSession {
         case .interrupted(let reason):
             photoReceiveTask?.cancel()
             photoReceiveTask = nil
+            pendingPhotoMetadata.removeAll()
+            receivingPhotoID = nil
             isPreviewStreaming = false
             dependencies.mediaPipeline.stop()
             phase = .interrupted(reason: reason)
@@ -257,10 +286,7 @@ final class AppSession {
                 )
                 return
             }
-            photoReceiveTask?.cancel()
-            photoReceiveTask = Task { [weak self] in
-                await self?.receivePhoto(metadata)
-            }
+            enqueuePhoto(metadata)
         case "photo.transferResult" where role == .camera:
             if case .string(let status)? = message.payload["status"] {
                 photoTransferStatus = status == "saved" ? "监看端已保存成片" : "监看端未能保存成片"
@@ -270,25 +296,113 @@ final class AppSession {
         }
     }
 
+    var hasUnsavedReceivedPhotos: Bool {
+        receivedPhotos.contains { !$0.isSavedToPhotoLibrary }
+    }
+
+    func saveAllReceivedPhotos() async {
+        guard !isSavingReceivedPhotos else { return }
+        let unsavedIDs = Set(
+            receivedPhotos
+                .filter { !$0.isSavedToPhotoLibrary }
+                .map(\.id)
+        )
+        guard !unsavedIDs.isEmpty else { return }
+
+        isSavingReceivedPhotos = true
+        defer { isSavingReceivedPhotos = false }
+        var savedCount = 0
+        var firstError: Error?
+
+        for index in receivedPhotos.indices where unsavedIDs.contains(receivedPhotos[index].id) {
+            let photo = receivedPhotos[index]
+            do {
+                try await dependencies.photoLibrary.saveFile(
+                    at: photo.fileURL,
+                    originalFileName: photo.metadata.fileName
+                )
+                receivedPhotos[index].isSavedToPhotoLibrary = true
+                savedCount += 1
+
+                do {
+                    try await dependencies.wifiAware.send(.photoTransferResult(
+                        photoId: photo.metadata.photoId,
+                        status: "saved"
+                    ))
+                } catch {
+                    // The file is already safely in Photos. Do not retry the save and create a duplicate.
+                }
+            } catch {
+                firstError = firstError ?? error
+            }
+        }
+
+        if let firstError {
+            photoTransferStatus = savedCount > 0
+                ? "已保存 \(savedCount) 张，部分照片保存失败"
+                : nil
+            lastError = Self.report(
+                firstError,
+                title: "保存接收照片失败",
+                stage: "将已校验成片批量写入照片库",
+                suggestion: "照片仍保留在当前会话中。确认照片权限和可用存储空间后再次点按保存。"
+            )
+        } else {
+            photoTransferStatus = "已保存 \(savedCount) 张成片到照片库"
+        }
+    }
+
+    private func enqueuePhoto(_ metadata: PhotoMetadata) {
+        let photoID = metadata.photoId
+        guard receivingPhotoID != photoID,
+              !pendingPhotoMetadata.contains(where: { $0.photoId == photoID }),
+              !receivedPhotos.contains(where: { $0.id == photoID })
+        else { return }
+
+        pendingPhotoMetadata.append(metadata)
+        startPhotoReceiverIfNeeded()
+    }
+
+    private func startPhotoReceiverIfNeeded() {
+        guard photoReceiveTask == nil, !pendingPhotoMetadata.isEmpty else { return }
+        photoReceiveTask = Task { [weak self] in
+            await self?.drainPhotoQueue()
+        }
+    }
+
+    private func drainPhotoQueue() async {
+        while !Task.isCancelled, !pendingPhotoMetadata.isEmpty {
+            let metadata = pendingPhotoMetadata.removeFirst()
+            receivingPhotoID = metadata.photoId
+            await receivePhoto(metadata)
+            receivingPhotoID = nil
+        }
+        photoReceiveTask = nil
+        if !pendingPhotoMetadata.isEmpty {
+            startPhotoReceiverIfNeeded()
+        }
+    }
+
     private func receivePhoto(_ metadata: PhotoMetadata) async {
         photoTransferStatus = "正在接收成片…"
+        var downloadedURL: URL?
         do {
             let temporaryURL = try await dependencies.wifiAware.downloadPhoto(metadata)
-            defer { try? FileManager.default.removeItem(at: temporaryURL) }
+            downloadedURL = temporaryURL
             try Task.checkCancellation()
             try await dependencies.photoResources.validateReceivedFile(at: temporaryURL, metadata: metadata)
             try Task.checkCancellation()
-            try await dependencies.photoLibrary.saveFile(at: temporaryURL)
-            try await dependencies.wifiAware.send(.photoTransferResult(
-                photoId: metadata.photoId,
-                status: "saved"
+            receivedPhotos.append(ReceivedPhoto(
+                metadata: metadata,
+                fileURL: temporaryURL,
+                isSavedToPhotoLibrary: false
             ))
-            photoTransferStatus = "成片已校验并保存"
-            photoReceiveTask = nil
+            downloadedURL = nil
+            photoTransferStatus = "已接收并校验 \(receivedPhotos.count) 张成片"
         } catch is CancellationError {
-            photoTransferStatus = nil
-            photoReceiveTask = nil
+            if let downloadedURL { try? FileManager.default.removeItem(at: downloadedURL) }
         } catch {
+            if let downloadedURL { try? FileManager.default.removeItem(at: downloadedURL) }
             try? await dependencies.wifiAware.send(.photoTransferResult(
                 photoId: metadata.photoId,
                 status: "failed",
@@ -298,10 +412,15 @@ final class AppSession {
             lastError = Self.report(
                 error,
                 title: "成片接收失败",
-                stage: "Wi-Fi Aware HTTP 下载、完整性校验或照片库保存",
-                suggestion: "查看错误域和代码判断是网络超时、SHA-256 校验失败还是照片库写入失败。"
+                stage: "Wi-Fi Aware HTTP 下载与完整性校验",
+                suggestion: "查看错误域和代码判断是网络超时、长度不匹配还是 SHA-256 校验失败。"
             )
-            photoReceiveTask = nil
+        }
+    }
+
+    private func removeReceivedPhotoFiles() {
+        for photo in receivedPhotos {
+            try? FileManager.default.removeItem(at: photo.fileURL)
         }
     }
 

@@ -39,6 +39,21 @@ final class HEVCRTPTests: XCTestCase {
         XCTAssertTrue(output.last?.endsAccessUnit == true)
     }
 
+    func testPacketizerAcceptsDataSlicesWithNonzeroStartIndex() throws {
+        let first: Data = Data([0xff, 0x40, 0x01, 0xaa, 0xbb]).dropFirst()
+        let second: Data = Data([0xff, 0x42, 0x01, 0xcc, 0xdd]).dropFirst()
+        var packetizer = HEVCRTPPacketizer(
+            payloadType: 96,
+            ssrc: 1,
+            maximumPacketSize: 1_200,
+            initialSequenceNumber: 1
+        )
+
+        let packets = try packetizer.packetize(accessUnit: [first, second], timestamp: 90_000)
+
+        XCTAssertFalse(packets.isEmpty)
+    }
+
     private func assertPacketizerMatches(_ item: [String: Any]) throws {
         let config = try XCTUnwrap(item["config"] as? [String: Any])
         let nalHex = try XCTUnwrap(item["nalUnitsHex"] as? [String])
